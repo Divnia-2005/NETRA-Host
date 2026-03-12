@@ -13,3 +13,5 @@ deep-translator
 selenium
 webdriver-manager
 gunicorn
+razorpay
+xhtml2pdf
