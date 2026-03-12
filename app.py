@@ -35,13 +35,15 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ---------------- DATABASE CONNECTION ----------------
 def get_db():
-    db = mysql.connector.connect(
-    host="mysql.railway.internal",
-    user="root",
-    password="KFkymwHWyGIPPiqzmnsuiPPgxcIlvFxg",
-    database="railway",
-    port=3306
-)    # Lazy Migration: Ensure event_date exists
+    conn = mysql.connector.connect(
+        host="ballast.proxy.rlwy.net",
+        user="root",
+        password="KFkymwHWyGIPPiqzmnsuiPPgxcIlvFxg",
+        database="railway",
+        port=57840
+    )
+    return conn
+   # Lazy Migration: Ensure event_date exists
     try:
         cur = conn.cursor()
         cur.execute("SELECT event_date FROM public_entries LIMIT 1")
@@ -2422,7 +2424,6 @@ def update_system_config():
         cur.close()
         conn.close()
 
-
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
 
