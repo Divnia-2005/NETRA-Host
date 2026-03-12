@@ -35,13 +35,13 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ---------------- DATABASE CONNECTION ----------------
 def get_db():
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="",
-        database="Netra"
-    )
-    # Lazy Migration: Ensure event_date exists
+    db = mysql.connector.connect(
+    host="mysql.railway.internal",
+    user="root",
+    password="KFkymwHWyGIPPiqzmnsuiPPgxcIlvFxg",
+    database="railway",
+    port=3306
+)    # Lazy Migration: Ensure event_date exists
     try:
         cur = conn.cursor()
         cur.execute("SELECT event_date FROM public_entries LIMIT 1")
