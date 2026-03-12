@@ -1,0 +1,2859 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Officer Dashboard — NETRA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" crossorigin=""></script>
+  <script>
+    function logout() {
+      // Explicitly kill all video streams to free up browser connection limits
+      // Using .remove() is safe and guarantees the stream connection is dropped
+      // without triggering an empty URL request like img.src = '' did.
+      document.querySelectorAll('img[src*="/video_feed/"]').forEach(img => {
+          img.parentNode.removeChild(img);
+      });
+      
+      if (window.stop) window.stop();
+      
+      // Small delay allows browser to close TCP connections before new request
+      setTimeout(() => {
+          window.location.href = '/logout';
+      }, 150);
+    }
+
+    // Stats Loading
+    async function loadOfficerStats() {
+      try {
+        const res = await fetch('/api/officer_stats');
+        const data = await res.json();
+        document.getElementById('statFines').innerText = data.fines_today || 0;
+        document.getElementById('statAlerts').innerText = data.resolved_total || 0;
+      } catch (e) { console.error(e); }
+    }
+
+    // Crowd Density Chart
+    let crowdChartInstance = null;
+
+    async function initCrowdChart() {
+      const ctx = document.getElementById('crowdChart');
+      if (!ctx) return;
+
+      crowdChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Density (%)',
+            data: [],
+            backgroundColor: [],
+            borderColor: [],
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,0.1)' } },
+            x: { grid: { display: false } }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+
+      updateCrowdData();
+      setInterval(updateCrowdData, 4000); // Live update
+    }
+
+    async function updateCrowdData() {
+      if (!crowdChartInstance) return;
+      try {
+        const res = await fetch('/api/crowd_status');
+        const data = await res.json();
+
+        const labels = data.map(d => d.name);
+        const values = data.map(d => d.density);
+        const colors = data.map(d => {
+          if (d.density > 80) return 'rgba(239, 68, 68, 0.7)'; // Red
+          if (d.density > 50) return 'rgba(234, 179, 8, 0.7)'; // Yellow
+          return 'rgba(34, 197, 94, 0.7)'; // Green
+        });
+
+        crowdChartInstance.data.labels = labels;
+        crowdChartInstance.data.datasets[0].data = values;
+        crowdChartInstance.data.datasets[0].backgroundColor = colors;
+        crowdChartInstance.data.datasets[0].borderColor = colors.map(c => c.replace('0.7', '1'));
+        crowdChartInstance.update();
+
+      } catch (e) { console.error("Crowd Chart Error:", e); }
+    }
+
+    // Patrol Log
+    async function logPatrol() {
+      if (!confirm("Log your current location as Patrol Check-in?")) return;
+
+      const loc = "Lat: 28.61, Lng: 77.21 (GPS Mock)";
+
+      try {
+        await fetch('/api/log_patrol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ location: loc })
+        });
+        alert("✅ Patrol Point Logged!");
+      } catch (e) { alert("Error logging patrol"); }
+    }
+
+
+    async function loadSettings() {
+      // Add settings initialization code here
+    }
+
+    window.addEventListener('load', () => {
+      loadOfficerStats();
+      initCrowdChart();
+      loadSettings(); // Load settings on page load
+    });
+  </script>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .glass:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .gradient-text {
+      background: linear-gradient(to right, #4ade80, #22d3ee);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .cam-feed {
+      background-color: #000;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .cam-overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: rgba(0, 255, 0, 0.8);
+      font-family: monospace;
+      font-size: 0.75rem;
+      z-index: 400;
+      /* Leaflet uses high z-indices, be careful if map overlaps, but here they are separate */
+      text-shadow: 0 0 2px black;
+    }
+
+    .rec-indicator {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: sans-serif;
+      font-size: 0.7rem;
+      color: white;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 2px 6px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+
+    .rec-dot {
+      width: 8px;
+      height: 8px;
+      background-color: red;
+      border-radius: 50%;
+      animation: blink 1.5s infinite;
+    }
+
+    @keyframes blink {
+      0% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0;
+      }
+
+      100% {
+        opacity: 1;
+      }
+    }
+
+    .scan-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: rgba(0, 255, 100, 0.3);
+      box-shadow: 0 0 10px rgba(0, 255, 100, 0.5);
+      animation: scan 4s linear infinite;
+      opacity: 0.5;
+      z-index: 5;
+    }
+
+    @keyframes scan {
+      0% {
+        top: -10%;
+      }
+
+      100% {
+        top: 110%;
+      }
+    }
+
+    .bg-sidebar {
+      background-color: rgba(17, 34, 23, 0.8);
+      backdrop-filter: blur(5px);
+    }
+
+    .accent {
+      color: #13ec5b;
+    }
+
+    .nav-btn {
+      display: block;
+      padding: 12px;
+      border-radius: 8px;
+      color: #9ca3af;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-weight: 500;
+    }
+
+    .nav-btn:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+      color: #13ec5b;
+      transform: translateX(4px);
+    }
+
+    .nav-btn.active {
+      background-color: rgba(19, 236, 91, 0.1);
+      color: #13ec5b;
+      border-left: 3px solid #13ec5b;
+    }
+
+    .lang-opt {
+      width: 100%;
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 0.75rem;
+      color: #d1d5db;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+
+    .lang-opt:hover {
+      background-color: rgba(19, 236, 91, 0.2);
+      color: #13ec5b;
+    }
+
+    @keyframes scan {
+      0% {
+        top: 0%;
+        opacity: 0;
+      }
+
+      10% {
+        opacity: 1;
+      }
+
+      90% {
+        opacity: 1;
+      }
+
+      100% {
+        top: 100%;
+        opacity: 0;
+      }
+    }
+
+    @keyframes scan {
+      0% {
+        top: 0%;
+        opacity: 0;
+      }
+
+      10% {
+        opacity: 1;
+      }
+
+      90% {
+        opacity: 1;
+      }
+
+      100% {
+        top: 100%;
+        opacity: 0;
+      }
+    }
+  </style>
+</head>
+
+<body
+  class="bg-[#050b07] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#0f2818] via-[#050b07] to-black text-white h-screen flex overflow-hidden">
+  <!-- TOP NAVBAR -->
+  <div id="overlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm">
+  </div>
+
+  <header class="fixed top-0 left-0 right-0 z-50 h-14
+               flex items-center gap-4
+               bg-[#102216] border-b border-green-900 px-4">
+
+    <!-- Hamburger -->
+    <button onclick="toggleSidebar()"
+      class="text-[#13ec5b] focus:outline-none focus:ring-2 focus:ring-[#13ec5b] rounded p-1"
+      aria-label="Toggle Navigation" title="Toggle Sidebar">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+        stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    </button>
+
+    <!-- Voice Command Button -->
+    <button onclick="startVoiceCommand()" id="micBtn"
+      class="ml-2 text-green-400 hover:text-white border border-green-500/30 p-1.5 rounded-full transition relative group"
+      title="Voice Commands">
+      <div id="micPulse" class="absolute inset-0 bg-green-500 rounded-full animate-ping opacity-0"></div>
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+        <path fill-rule="evenodd"
+          d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z"
+          clip-rule="evenodd" />
+      </svg>
+    </button>
+
+    <span class="font-bold text-[#13ec5b] text-lg flex-1">
+      NETRA Officer
+    </span>
+
+
+
+    <!-- NOTIFICATION BELL -->
+    <div class="relative mr-2 group z-50">
+      <button class="relative p-2 text-green-400 hover:text-white transition focus:outline-none">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+        </svg>
+        <span id="notificationDot"
+          class="absolute top-1 right-1 h-2.5 w-2.5 bg-red-500 rounded-full animate-pulse hidden"></span>
+      </button>
+
+      <!-- Dropdown -->
+      <div
+        class="absolute right-0 top-full mt-2 w-80 bg-[#0a160f] border border-green-500/30 rounded-lg shadow-xl hidden group-hover:block z-50">
+        <div class="p-3 border-b border-white/5 flex justify-between items-center">
+          <h3 class="text-xs font-bold text-gray-400 uppercase">Notifications</h3>
+          <button onclick="markAllRead()" class="text-xs text-blue-400 hover:text-white">Mark Read</button>
+        </div>
+        <div id="notificationList" class="max-h-60 overflow-y-auto custom-scrollbar p-1">
+          <p class="text-center text-gray-500 text-xs py-4">Loading...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Language Selector -->
+    <!-- Custom Language Selector -->
+    <div class="relative mr-4 group z-50">
+      <button id="langBtn"
+        class="flex items-center gap-2 bg-[#102216] text-[#13ec5b] border border-[#13ec5b] text-xs rounded px-3 py-1.5 focus:outline-none hover:bg-[#13ec5b]/10 transition">
+        <span id="currentLangLabel">Language</span>
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      <!-- Dropdown Menu -->
+      <div class="absolute right-0 top-full pt-1 w-40 hidden group-hover:block z-50">
+        <div class="bg-[#0a160f] border border-[#13ec5b]/30 rounded-lg shadow-xl overflow-hidden">
+          <div class="max-h-60 overflow-y-auto custom-scrollbar-chat p-1 space-y-1">
+            <button onclick="setLang('en', 'English')" class="lang-opt">English</button>
+            <button onclick="setLang('hi', 'Hindi')" class="lang-opt">Hindi</button>
+            <button onclick="setLang('ml', 'Malayalam')" class="lang-opt">Malayalam</button>
+            <button onclick="setLang('fr', 'French')" class="lang-opt">French</button>
+            <button onclick="setLang('es', 'Spanish')" class="lang-opt">Spanish</button>
+            <button onclick="setLang('zh', 'Chinese')" class="lang-opt">Chinese</button>
+            <button onclick="setLang('de', 'German')" class="lang-opt">German</button>
+            <button onclick="setLang('ja', 'Japanese')" class="lang-opt">Japanese</button>
+            <button onclick="setLang('ru', 'Russian')" class="lang-opt">Russian</button>
+            <button onclick="setLang('ar', 'Arabic')" class="lang-opt">Arabic</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+  </header>
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar" class="fixed top-0 left-0 z-50 w-64 h-full
+         bg-sidebar p-4 flex flex-col overflow-x-hidden
+         transform -translate-x-full
+         transition-transform duration-300">
+
+    <h2 class="text-xl font-bold accent mb-6">NETRA Officer</h2>
+    <!-- OFFICER PROFILE CARD -->
+    <div class="flex items-center gap-3 bg-[#1a2e22] p-3 rounded">
+      <div class="relative">
+        <img id="officerPic" src="https://via.placeholder.com/60"
+          class="w-14 h-14 rounded-full object-cover border border-green-400">
+        <label for="profileUpload"
+          class="absolute bottom-0 right-0 bg-green-500 text-black rounded-full p-1 cursor-pointer hover:bg-white transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+            <path
+              d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+          </svg>
+        </label>
+        <input type="file" id="profileUpload" class="hidden" accept="image/*" onchange="updateOfficerPic(event)">
+      </div>
+      <div>
+        <h3 id="officerName" class="font-bold text-white leading-tight">Officer</h3>
+        <p class="text-[0.65rem] text-green-400 uppercase tracking-wider" data-i18n="active_duty">Active Duty</p>
+      </div>
+    </div>
+
+    <!-- NEW: Patrol Check-in -->
+    <button onclick="openPatrolModal()"
+      class="w-full bg-blue-600/20 text-blue-400 hover:bg-blue-600/40 border border-blue-500/50 py-3 rounded-xl font-bold transition flex items-center justify-center gap-2 group">
+      <span class="mr-1">📍</span> <span data-i18n="log_patrol">Log Patrol Point</span>
+    </button>
+
+    <!-- NEW: Mini Stats -->
+    <div class="grid grid-cols-2 gap-2 text-center text-xs">
+      <div class="glass p-2 rounded">
+        <p class="text-gray-400" data-i18n="fines_today">Fines Today</p>
+        <p id="statFines" class="text-lg font-bold text-white">--</p>
+      </div>
+      <div class="glass p-2 rounded">
+        <p class="text-gray-400" data-i18n="resolved">Resolved</p>
+        <p id="statAlerts" class="text-lg font-bold text-green-400">--</p>
+      </div>
+    </div>
+
+    <nav class="space-y-1 mt-4 flex-1 overflow-y-auto custom-scrollbar-chat pr-2 min-h-0">
+      <button onclick="showSection('overview', this)" class="nav-btn active">
+        <span class="mr-2">📊</span> <span data-i18n="overview">Overview</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('cases', this)">
+        <span class="mr-2">📁</span> <span data-i18n="case_files">Case Files</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('map', this)">
+        <span class="mr-2">🗺️</span> <span data-i18n="tactical_map">Tactical Map</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('alerts', this)">
+        <span class="mr-2">🔔</span> <span data-i18n="alerts">System Alerts</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('reports', this)">
+        <span class="mr-2">📄</span> <span data-i18n="reports">Reports</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('messages', this)">
+        <span class="mr-2">💬</span> <span data-i18n="messages">Messages</span>
+      </button>
+      <button class="nav-btn text-blue-400" onclick="showSection('verify_entry', this)">
+        <span class="mr-2">🎟️</span> <span data-i18n="verify_entry">Verify Entry</span>
+      </button>
+      <button class="nav-btn" onclick="showSection('settings', this)">
+        <span class="mr-2">⚙️</span> <span data-i18n="settings">Settings</span>
+      </button>
+      <button class="nav-btn mt-4" onclick="showSection('profile', this)">
+        <span class="mr-2">👤</span> <span data-i18n="profile">Profile</span>
+      </button>
+    </nav>
+
+    <!-- Sidebar Bottom Actions -->
+    <div class="mt-auto pt-4 border-t border-white/10 relative z-[60]">
+      <button onclick="logout()"
+        class="w-full group bg-red-500/10 hover:bg-red-500 border border-red-500/30 hover:border-red-500 p-3 rounded-xl transition-all duration-300 flex items-center justify-between overflow-hidden relative cursor-pointer block no-underline">
+        <div
+          class="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000">
+        </div>
+        <div class="flex items-center gap-3">
+          <div
+            class="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center text-red-500 group-hover:text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+              stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M17 16l4-4m0 0l-4 4m4-4H3m6 0v-3a4 4 0 00-4-4H7a4 4 0 00-4 4v3m6 0v6a4 4 0 01-4 4H7a4 4 0 01-4-4v-6" />
+            </svg>
+          </div>
+          <span class="text-white font-bold" data-i18n="logout">Logout</span>
+        </div>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="flex-1 p-6 overflow-y-auto pt-16">
+
+    <!-- OVERVIEW -->
+    <section id="overview" class="section">
+      <h1 class="text-3xl font-bold mb-1 tracking-tight"><span data-i18n="command_center">Command Center</span></h1>
+      <p class="text-sm text-[#a7f3d0] mb-6" data-i18n="system_online">System Online</p>
+
+      <!-- QUICK ACTIONS -->
+      <div class="flex gap-4 mb-6">
+        <button onclick="triggerAction('alarm')"
+          class="flex-1 bg-red-600/20 text-red-400 border border-red-600 px-6 py-4 rounded-xl hover:bg-red-600 hover:text-white transition font-bold text-lg"
+          data-i18n="trigger_alarm">Trigger Alarm</button>
+
+        <button onclick="stopBuzzer()"
+          class="flex-1 bg-blue-600/20 text-blue-400 border border-blue-600 px-6 py-4 rounded-xl hover:bg-blue-600 hover:text-white transition font-bold text-lg" data-i18n="stop_buzzer">
+          Stop Buzzer
+        </button>
+      </div>
+
+
+      <!-- LIVE FEEDS (Enhanced Grid) -->
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold" data-i18n="live_surveillance">Live Surveillance</h2>
+        <button onclick="enterFullScreen()"
+          class="text-xs text-green-400 border border-green-500/30 px-2 py-1 rounded hover:bg-green-500/10" data-i18n="full_view">Full
+          View</button>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <!-- Cam 1 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-01 [GATE]')">
+          <div class="cam-overlay">CAM-01 [GATE]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/0" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition"
+            alt="Cam 1">
+        </div>
+        <!-- Cam 2 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-02 [LOBBY]')">
+          <div class="cam-overlay">CAM-02 [LOBBY]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/1" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition"
+            alt="Cam 2">
+        </div>
+        <!-- Cam 3 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-03 [CORRIDOR]')">
+          <div class="cam-overlay">CAM-03 [CORRIDOR]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/2" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition"
+            alt="Cam 3">
+        </div>
+        <!-- Cam 4 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-04 [EXIT]')">
+          <div class="cam-overlay">CAM-04 [EXIT]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/3" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition"
+            alt="Cam 4">
+        </div>
+      </div>
+
+      <!-- Second Row of Cameras -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <!-- Cam 5 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-05 [PARKING]')">
+          <div class="cam-overlay">CAM-05 [PARKING]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/4" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition">
+        </div>
+        <!-- Cam 6 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-06 [ROOF]')">
+          <div class="cam-overlay">CAM-06 [ROOF]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/5" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition">
+        </div>
+        <!-- Cam 7 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-07 [SERVER]')">
+          <div class="cam-overlay">CAM-07 [SERVER]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/6" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition">
+        </div>
+        <!-- Cam 8 -->
+        <div class="cam-feed rounded-xl h-40 relative group cursor-pointer" onclick="viewCamera('CAM-08 [DOCK]')">
+          <div class="cam-overlay">CAM-08 [DOCK]</div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> LIVE
+          </div>
+          <img src="/video_feed/7" class="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition">
+        </div>
+      </div>
+
+      <!-- AI SUSPICIOUS ACTIVITY ALERTS -->
+      <div class="mb-6">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="text-lg font-bold text-orange-400 flex items-center gap-2">
+            <span class="animate-pulse">⚠️</span> <span data-i18n="suspicious_alerts">Suspicious Activity Alerts</span>
+          </h2>
+          <button onclick="simulateAIAlert()"
+            class="text-xs border border-orange-500/30 text-orange-400 px-2 py-1 rounded hover:bg-orange-500/10" data-i18n="simulate_detection">Simulate Detection</button>
+        </div>
+
+        <div id="aiAlertsPanel" class="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
+          <!-- Dynamic Alert Cards -->
+          <div class="min-w-[280px] bg-red-900/20 border border-red-500/40 p-3 rounded-xl">
+            <div class="flex justify-between items-start mb-2">
+              <span class="text-xs font-mono text-red-400">CAM-04 [EXIT]</span>
+              <span class="text-[10px] bg-red-500 text-white px-1.5 rounded">CRITICAL</span>
+            </div>
+            <h3 class="font-bold text-sm text-white mb-1">Crowd Surge Detected</h3>
+            <p class="text-xs text-gray-400 mb-3">Rapid movement > 3m/s detected in narrow exit corridor.</p>
+            <div class="h-24 bg-black rounded mb-3 overflow-hidden relative">
+              <img src="/video_feed/2" class="w-full h-full object-cover opacity-80">
+              <div class="absolute inset-0 border-2 border-red-500 animate-pulse"></div>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="this.parentElement.parentElement.remove()"
+                class="flex-1 bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded" data-i18n="acknowledge">Acknowledge</button>
+              <button onclick="triggerAction('broadcast')"
+                class="flex-1 bg-red-600 hover:bg-red-500 text-white text-xs py-1.5 rounded font-bold" data-i18n="escalate">Escalate</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- RECORD CONSOLE (Dynamic) -->
+    <section id="alerts" class="section hidden">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold" data-i18n="records_console">Records Console</h2>
+        <div class="flex gap-2">
+          <input type="text" id="recordSearch" onkeyup="filterRecords()" placeholder="Search keywords..." data-i18n="search_placeholder"
+            class="glass text-white px-3 py-1 rounded border border-green-800 text-sm">
+          <select id="recordFilter" onchange="filterRecords()"
+            class="glass text-white px-3 py-1 rounded border border-green-800 text-sm">
+            <option value="all" data-i18n="all_status">All Status</option>
+            <option value="unresolved" data-i18n="unresolved">Unresolved</option>
+            <option value="resolved" data-i18n="resolved">Resolved</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="glass rounded-xl overflow-x-auto border border-white/5">
+        <table class="w-full text-sm text-left">
+          <thead class="text-xs uppercase bg-white/5 text-gray-400 border-b border-white/5">
+            <tr>
+              <th class="px-4 py-3" data-i18n="id">ID</th>
+              <th class="px-4 py-3" data-i18n="time">Time</th>
+              <th class="px-4 py-3" data-i18n="source">Source</th>
+              <th class="px-4 py-3" data-i18n="message">Message</th>
+              <th class="px-4 py-3" data-i18n="severity">Severity</th>
+              <th class="px-4 py-3" data-i18n="status">Status</th>
+              <th class="px-4 py-3" data-i18n="action">Action</th>
+            </tr>
+          </thead>
+          <tbody id="recordsTableBody" class="divide-y divide-white/5">
+            {% for alert in alerts %}
+            <tr class="record-row hover:bg-white/5 transition duration-150"
+              data-content="{{ alert.message|e }} {{ alert.source|e }} {{ alert.id }}" data-status="{{ alert.status }}">
+              <td class="px-4 py-3 font-mono text-emerald-400">#{{ alert.id }}</td>
+              <td class="px-4 py-3 text-gray-400">{{ alert.created_at }}</td>
+              <td class="px-4 py-3 font-bold text-gray-200">{{ alert.source }}</td>
+              <td class="px-4 py-3 text-gray-300">{{ alert.message }}</td>
+              <td class="px-4 py-3">
+                {% if alert.severity == 'Critical' %}
+                <span
+                  class="bg-red-500/20 text-red-300 py-1 px-2 rounded text-xs font-bold border border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.2)]">CRITICAL</span>
+                {% elif alert.severity == 'Warning' %}
+                <span
+                  class="bg-yellow-500/20 text-yellow-300 py-1 px-2 rounded text-xs font-bold border border-yellow-500/20">WARNING</span>
+                {% else %}
+                <span
+                  class="bg-green-500/20 text-green-300 py-1 px-2 rounded text-xs font-bold border border-green-500/20">INFO</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                <span id="status-{{alert.id}}"
+                  class="py-1 px-2 rounded text-xs font-bold {{ 'bg-green-500/20 text-green-400 border border-green-500/20' if alert.status =='Resolved' else 'bg-red-500/20 text-red-400 border border-red-500/20' }}">
+                  {{ alert.status }}
+                </span>
+              </td>
+              <td class="px-4 py-3">
+                {% if alert.status != 'Resolved' %}
+                <button onclick="updateStatus('{{ alert.id }}', 'Resolved')"
+                  class="bg-[#13ec5b] text-black px-2 py-1 rounded text-xs hover:bg-green-400 font-bold shadow-lg shadow-green-500/20">Resolve</button>
+                {% else %}
+                <span class="text-gray-600 text-xs">No Action</span>
+                {% endif %}
+
+                <!-- Share Button -->
+                <button onclick="shareAlert('{{ alert.message|e }}', '{{ alert.source|e }}')"
+                  class="ml-2 text-blue-400 hover:text-white border border-blue-500/30 px-2 py-1 rounded text-xs transition focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                  aria-label="Share Alert" title="Share Alert" data-i18n="share">
+                  Share
+                </button>
+
+                <!-- Navigate Button -->
+                <button onclick="navigateToAlert('{{ alert.message|e }}')"
+                  class="ml-2 text-yellow-400 hover:text-white border border-yellow-500/30 px-2 py-1 rounded text-xs transition focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                  aria-label="View Location on Map" title="View location on map">
+                  📍
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not alerts %}
+            <tr>
+              <td colspan="7" class="px-4 py-6 text-center text-gray-500 italic">No records found using current
+                connection.</td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+
+    <!-- MAP VIEW -->
+    <section id="map" class="section hidden">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold" data-i18n="tactical_map">Tactical Map</h2>
+        <button onclick="toggleHeatmap()" data-i18n="toggle_heatmap"
+          class="bg-[#13ec5b]/20 text-[#13ec5b] px-3 py-1 rounded border border-[#13ec5b] hover:bg-[#13ec5b] hover:text-black transition text-sm font-bold">
+          Toggle Heatmap
+        </button>
+      </div>
+      <div class="glass p-2 rounded-xl">
+        <div id="officerMap" class="h-96 w-full rounded-lg z-0"></div>
+      </div>
+    </section>
+
+    <!-- REPORTS -->
+    <section id="reports" class="section hidden">
+      <h2 class="text-xl font-bold mb-4" data-i18n="reports">Reports</h2>
+      <div class="glass p-4 rounded flex justify-between items-center">
+        <div>
+          <h3 class="font-bold text-lg" data-i18n="download_reports">Download Reports</h3>
+          <p class="text-sm text-gray-400" data-i18n="export_hint">Export incident logs and alerts to Excel.</p>
+        </div>
+        <button onclick="exportReports()"
+          class="bg-[#13ec5b] text-black px-4 py-2 rounded hover:bg-green-400 font-bold" data-i18n="export_excel">
+          Export to Excel
+        </button>
+      </div>
+    </section>
+
+
+    <!-- MESSAGES -->
+    <section id="messages" class="section hidden">
+      <h2 class="text-xl font-bold mb-4" data-i18n="messages">Messages</h2>
+      <div class="glass p-6 rounded-xl border border-white/5 mb-6">
+        <h3 class="panel-title mb-4 font-bold text-emerald-400" data-i18n="comms_hq">Comms with HQ</h3>
+
+        <!-- Compose -->
+        <div class="mb-4 space-y-2">
+          <div class="flex gap-2">
+            <select id="msgRecipient"
+              class="glass p-2 rounded text-sm border-white/10 w-1/3 text-gray-300 focus:outline-none focus:border-green-500">
+              <option value="" disabled selected class="bg-black">Select Recipient...</option>
+              {% for user in recipients %}
+              <option value="{{ user.id }}"
+                class="bg-black {{ 'font-bold text-green-400' if user.role == 'admin' else '' }}">
+                {{ user.name }} ({{ user.role|capitalize }})
+              </option>
+              {% endfor %}
+            </select>
+
+            <input id="msgContent" type="text" placeholder="Type a message..." data-i18n="type_message"
+              class="glass p-2 rounded text-sm border-white/10 w-full text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+            <button onclick="sendMessage()"
+              class="bg-gradient-to-r from-green-500 to-emerald-600 text-black px-4 py-2 rounded hover:from-green-400 hover:to-emerald-500 font-bold shadow-lg shadow-green-500/20 transition-all duration-300" data-i18n="send">
+              Send
+            </button>
+          </div>
+        </div>
+
+        <!-- Log -->
+        <h4 class="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Inbox / Sent</h4>
+        <div class="h-[400px] overflow-y-auto space-y-3 custom-scrollbar pr-2">
+          {% for msg in messages %}
+          <div
+            class="p-3 rounded-lg text-sm shadow-sm {{ 'bg-emerald-900/20 ml-12 border-l-2 border-emerald-500 self-end text-right' if msg.sender_id == session.user.id else 'bg-white/5 mr-12 border-r-2 border-gray-600' }}">
+            <div
+              class="flex justify-between text-xs text-gray-500 mb-1 {{ 'flex-row-reverse' if msg.sender_id == session.user.id }}">
+              <span class="font-bold text-gray-400">
+                {% if msg.sender_id == session.user.id %}
+                You ➔ Admin
+                {% else %}
+                {{ msg.sender_name }} ➔ You
+                {% endif %}
+              </span>
+              <span>{{ msg.timestamp }}</span>
+            </div>
+            <p class="text-gray-200">{{ msg.content }}</p>
+          </div>
+          {% endfor %}
+          {% if not messages %}
+          <div class="flex flex-col items-center justify-center h-full text-gray-500 space-y-2">
+            <span class="text-2xl opacity-20">💬</span>
+            <p class="text-xs italic">No messages.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <!-- VERIFY ENTRY -->
+    <section id="verify_entry" class="section hidden">
+      <h2 class="text-xl font-bold mb-4" data-i18n="verify_entry">Verify Visitor Entry</h2>
+      <div class="glass p-8 rounded-xl max-w-lg mx-auto border border-white/10">
+        <p class="text-gray-400 mb-6 text-center" data-i18n="verify_hint">Search visitor database by Name and Phone Number.</p>
+
+        <div class="space-y-4 mb-6">
+          <div>
+            <label class="text-xs text-gray-400 ml-1" data-i18n="visitor_name">Visitor Name</label>
+            <input id="vizName" type="text" placeholder="John Doe" data-i18n="visitor_name"
+              class="w-full glass p-3 rounded text-white border-white/20 focus:border-green-500 outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 ml-1" data-i18n="phone_number">Phone Number</label>
+            <input id="vizPhone" type="text" placeholder="9876543210" data-i18n="phone_number"
+              class="w-full glass p-3 rounded text-white border-white/20 focus:border-green-500 outline-none">
+          </div>
+        </div>
+
+        <button onclick="verifyVisitor()"
+          class="w-full bg-[#13ec5b] text-black px-8 py-3 rounded-xl font-bold text-lg hover:bg-green-400 shadow-lg shadow-green-500/30 transition transform hover:scale-[1.02]" data-i18n="search_verify">
+          Search & Verify
+        </button>
+
+        <div id="verifyResult" class="mt-6 hidden"></div>
+      </div>
+    </section>
+
+    <section id="cases" class="section hidden">
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-xl font-bold" data-i18n="my_cases">My Case Files</h2>
+        <button onclick="openCreateCaseModal()"
+          class="bg-[#13ec5b] text-black px-4 py-2 rounded hover:bg-green-400 font-bold shadow-lg shadow-green-500/20 flex items-center gap-2">
+          <span>+</span> <span data-i18n="create_case">Create New Case</span>
+        </button>
+      </div>
+
+      <div class="glass p-6 rounded-xl border border-white/5">
+        <h3 class="panel-title mb-4 font-bold text-blue-400" data-i18n="assigned_investigations">Assigned Investigations</h3>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="text-gray-400 border-b border-gray-700">
+                <th class="py-3 px-4" data-i18n="id">Case ID</th>
+                <th class="py-3 px-4" data-i18n="case_title">Title</th>
+                <th class="py-3 px-4" data-i18n="status">Status</th>
+                <th class="py-3 px-4" data-i18n="created_date">Created Date</th>
+                <th class="py-3 px-4" data-i18n="action">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for case in my_cases %}
+              <tr class="border-b border-gray-800 hover:bg-white/5 transition">
+                <td class="py-3 px-4 font-mono text-green-400">{{ case.case_id }}</td>
+                <td class="py-3 px-4 font-bold">{{ case.title }}</td>
+                <td class="py-3 px-4">
+                  <span
+                    class="px-2 py-1 rounded text-xs border 
+                    {{ 'border-green-500/30 text-green-400 bg-green-500/10' if case.status=='Open' else 'border-gray-500/30 text-gray-400' }}">
+                    {{ case.status }}
+                  </span>
+                </td>
+                <td class="py-3 px-4 text-gray-400">{{ case.created_at }}</td>
+                <td class="py-3 px-4">
+                  <button onclick="openCaseDetails('{{ case.case_id }}')"
+                    class="text-blue-400 hover:text-blue-300 text-xs border border-blue-500/30 px-2 py-1 rounded" data-i18n="view_details">
+                    View Details
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+              {% if not my_cases %}
+              <tr>
+                <td colspan="5" class="py-8 text-center text-gray-500 italic">No assigned cases found.</td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- CREATE CASE MODAL -->
+    <div id="createCaseModal"
+      class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+      <div class="glass p-8 rounded-2xl max-w-lg w-full border border-green-500/30 shadow-2xl relative">
+        <h2 class="text-2xl font-bold text-white mb-6" data-i18n="new_investigation">Create New Investigation</h2>
+
+        <div class="space-y-4">
+          <div>
+            <label class="text-sm text-gray-400 block mb-1" data-i18n="case_title">Case Title</label>
+            <input id="caseTitle" type="text" placeholder="e.g. Suspicious Activity at Gate 4" data-i18n="case_title"
+              class="w-full glass p-3 rounded text-white border-white/10 focus:border-green-500 outline-none">
+          </div>
+
+          <div>
+            <label class="text-sm text-gray-400 block mb-1" data-i18n="incident_report">Description / Initial Report</label>
+            <textarea id="caseDesc" rows="4" placeholder="Describe the incident details..." data-i18n="incident_report"
+              class="w-full glass p-3 rounded text-white border-white/10 focus:border-green-500 outline-none"></textarea>
+          </div>
+
+          <div class="flex gap-4 mt-8 pt-4 border-t border-white/10">
+            <button onclick="closeCreateCaseModal()"
+              class="flex-1 py-3 rounded border border-gray-600 hover:bg-gray-800 text-gray-400" data-i18n="cancel">Cancel</button>
+            <button onclick="createCase()"
+              class="flex-1 py-3 rounded bg-green-600 hover:bg-green-500 text-white font-bold shadow-lg shadow-green-500/30" data-i18n="create_case">Create
+              Case</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CASE DETAILS & EVIDENCE MODAL -->
+    <div id="caseDetailsModal"
+      class="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+      <div
+        class="glass p-8 rounded-2xl max-w-4xl w-full border border-blue-500/30 shadow-2xl relative h-[90vh] flex flex-col">
+        <div class="flex justify-between items-start mb-6 border-b border-white/10 pb-4">
+          <div>
+            <h2 id="cdTitle" class="text-2xl font-bold text-white">Case #ID</h2>
+            <p id="cdStatus" class="text-sm text-green-400 mt-1">Status: Open</p>
+          </div>
+          <div class="flex items-center gap-4">
+            <a id="exportReportBtn" href="#" target="_blank"
+              class="bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded text-sm transition font-bold flex items-center gap-2">
+              📄 Export Report
+            </a>
+            <button onclick="closeCaseDetailsModal()" class="text-gray-400 hover:text-white text-2xl">×</button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto custom-scrollbar space-y-8 pr-2">
+          <!-- Description -->
+          <div class="bg-white/5 p-4 rounded-lg">
+            <h3 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2">Incident Report</h3>
+            <p id="cdDesc" class="text-gray-300 whitespace-pre-wrap">Loading...</p>
+          </div>
+
+          <!-- Evidence Section -->
+          <div>
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-lg font-bold text-blue-400" data-i18n="evidence_locker">Evidence Locker</h3>
+              <label for="evidenceUpload"
+                class="cursor-pointer bg-blue-600/20 text-blue-400 border border-blue-600 px-4 py-2 rounded hover:bg-blue-600 hover:text-white transition flex items-center gap-2">
+                <span>⬆</span> <span data-i18n="upload_evidence">Upload Evidence</span>
+              </label>
+              <input type="file" id="evidenceUpload" class="hidden" onchange="handleEvidenceSelection(this)">
+            </div>
+
+            <!-- Upload Preview (Hidden by default) -->
+            <div id="uploadPreview" class="hidden glass p-4 rounded-lg mb-4 border border-blue-500/30">
+              <h4 class="font-bold text-white mb-2">New Upload</h4>
+              <div class="flex gap-4 items-end">
+                <div class="flex-1">
+                  <span id="fileName" class="text-sm text-gray-400 block mb-2">filename.jpg</span>
+                  <input id="evidenceTags" type="text" placeholder="Tags (e.g. weapon, vehicle, suspect)"
+                    class="w-full glass p-2 rounded text-white border-white/10 focus:border-blue-500 outline-none text-sm">
+                </div>
+                <button onclick="uploadEvidence()"
+                  class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold shadow-lg">Confirm
+                  Upload</button>
+                <button onclick="cancelUpload()" class="text-red-400 hover:text-white px-3 py-2">Cancel</button>
+              </div>
+            </div>
+
+            <!-- Evidence List -->
+            <div class="glass rounded-xl overflow-hidden border border-white/5">
+              <table class="w-full text-sm text-left">
+                <thead class="bg-white/5 text-gray-400 uppercase text-xs">
+                  <tr>
+                    <th class="p-3">File</th>
+                    <th class="p-3">Type</th>
+                    <th class="p-3">Tags</th>
+                    <th class="p-3">Status</th>
+                    <th class="p-3">Uploaded</th>
+                    <th class="p-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="evidenceListBody">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+              <p id="noEvidenceMsg" class="p-4 text-center text-gray-500 italic hidden">No evidence collected yet.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <section id="settings" class="section hidden">
+      <div class="max-w-4xl mx-auto space-y-8">
+        <h2 class="text-3xl font-bold tracking-tight">Settings</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="glass p-6 rounded-2xl border border-white/5 space-y-6">
+            <h3 class="text-sm font-bold text-blue-400 uppercase tracking-widest">Preferences</h3>
+            <div class="space-y-4">
+              <div class="flex justify-between items-center">
+                <div>
+                  <p class="font-bold">Notifications</p>
+                  <p class="text-xs text-gray-500">Alerts for task updates</p>
+                </div>
+                <input type="checkbox" id="settNotif" class="w-5 h-5 accent-green-500" checked>
+              </div>
+              <div class="flex justify-between items-center">
+                <div>
+                  <p class="font-bold">High Contrast</p>
+                  <p class="text-xs text-gray-500">Darker dashboard theme</p>
+                </div>
+                <input type="checkbox" id="settDark" class="w-5 h-5 accent-blue-500" checked
+                  onchange="toggleDarkMode(this)">
+              </div>
+            </div>
+          </div>
+          <div class="glass p-6 rounded-2xl border border-white/5 space-y-6">
+            <h3 class="text-sm font-bold text-purple-400 uppercase tracking-widest">Controls</h3>
+            <div class="space-y-4">
+              <label class="block">
+                <span class="text-xs text-gray-500">Alert Volume</span>
+                <input id="settVol" type="range" class="w-full" value="80">
+              </label>
+              <button onclick="saveSettings()"
+                class="w-full bg-[#13ec5b] text-black font-bold py-3 rounded-xl hover:bg-green-400 transition">
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROFILE -->
+    <section id="profile" class="section hidden">
+      <div class="max-w-4xl mx-auto space-y-8">
+        <h2 class="text-3xl font-bold tracking-tight">My Profile</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div class="glass p-8 rounded-3xl border border-green-500/10 space-y-8 relative overflow-hidden">
+            <div class="flex items-center gap-6">
+              <img id="officerPicPreview" src="https://via.placeholder.com/120"
+                class="w-24 h-24 rounded-full object-cover border-2 border-green-400 shadow-[0_0_20px_rgba(34,197,94,0.3)]">
+              <div>
+                <h3 class="text-2xl font-bold">{{ session.user.name }}</h3>
+                <p class="text-green-400 font-mono text-sm uppercase">{{ session.user.role }}</p>
+              </div>
+            </div>
+            <div class="space-y-4">
+              <div>
+                <label class="text-xs text-gray-500 ml-1">Full Name</label>
+                <input id="officerProfileName"
+                  class="w-full glass p-3 rounded-xl border-white/10 outline-none focus:border-green-500"
+                  value="{{ session.user.name }}">
+              </div>
+              <div>
+                <label class="text-xs text-gray-500 ml-1">Email</label>
+                <input class="w-full glass p-3 rounded-xl border-white/5 bg-black/20 text-gray-400"
+                  value="{{ session.user.email }}" readonly>
+              </div>
+              <button onclick="saveOfficerProfile()"
+                class="w-full bg-green-600 text-white font-bold py-3 rounded-xl hover:bg-green-500 transition">
+                Update Profile Info
+              </button>
+            </div>
+          </div>
+          <div class="glass p-8 rounded-3xl border border-red-500/10 space-y-8">
+            <h3 class="text-sm font-bold text-red-400 uppercase tracking-widest">Security</h3>
+            <div class="space-y-4">
+              <div class="bg-white/5 p-4 rounded-xl border border-white/5 flex justify-between items-center">
+                <div>
+                  <p class="font-bold">2FA Status</p>
+                  <p class="text-xs text-gray-500">Not enabled</p>
+                </div>
+                <button class="text-xs text-blue-400 border border-blue-500/30 px-3 py-1 rounded">Enable</button>
+              </div>
+              <button onclick="alert('Password reset link sent to your email.')"
+                class="w-full glass py-3 rounded-xl hover:bg-white/5 transition">
+                Change Password
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+
+    <!-- AI FEEDBACK MODAL -->
+    <div id="aiFeedbackModal"
+      class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+      <div class="glass p-6 rounded-2xl max-w-sm w-full border border-purple-500/30 relative">
+        <h3 class="text-lg font-bold text-purple-400 mb-4">Review AI Detection</h3>
+        <p class="text-sm text-gray-300 mb-4">Was the AI analysis for this file correct?</p>
+
+        <input type="hidden" id="feedbackEvidenceId">
+
+        <div class="space-y-3">
+          <button onclick="submitFeedback('Correct')"
+            class="w-full bg-green-900/40 text-green-400 border border-green-500/30 p-2 rounded hover:bg-green-900/60">
+            ✔ Correct Detection
+          </button>
+          <button onclick="submitFeedback('False Positive')"
+            class="w-full bg-red-900/40 text-red-400 border border-red-500/30 p-2 rounded hover:bg-red-900/60">
+            ✖ False Positive
+          </button>
+          <button onclick="submitFeedback('Missed Object')"
+            class="w-full bg-yellow-900/40 text-yellow-400 border border-yellow-500/30 p-2 rounded hover:bg-yellow-900/60">
+            ⚠ Missed Object
+          </button>
+        </div>
+
+        <textarea id="feedbackComment" placeholder="Optional comments..."
+          class="w-full glass mt-4 p-2 rounded text-sm text-white focus:outline-none border-white/10"></textarea>
+
+        <button onclick="closeFeedbackModal()"
+          class="mt-4 text-gray-500 text-xs w-full hover:text-white">Cancel</button>
+      </div>
+    </div>
+    <div id="challanModal"
+      class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+      <div
+        class="glass p-8 rounded-2xl max-w-md w-full border border-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.5)] relative">
+        <h2 class="text-2xl font-bold text-white mb-4">File Incident Report</h2>
+
+        <div class="space-y-4">
+          <div>
+            <label class="text-sm text-gray-400">Suspect Name / Description</label>
+            <input id="challanName" type="text" placeholder="e.g. Male in Red Shirt"
+              class="w-full glass p-2 rounded text-white border-white/20 focus:border-blue-500 outline-none">
+          </div>
+
+          <div>
+            <label class="text-sm text-gray-400">Incident Type</label>
+            <select id="challanReason"
+              class="w-full glass p-2 rounded text-white border-white/20 focus:border-blue-500 outline-none bg-black">
+              <option value="Suspicious Activity">Suspicious Activity</option>
+              <option value="Public Disturbance">Public Disturbance/Panic</option>
+              <option value="Unauthorised Objects">Unauthorised Objects (Weapons/Bags)</option>
+              <option value="Trespassing">Trespassing</option>
+              <option value="Loitering">Loitering</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="text-sm text-gray-400">Evidence (Photo)</label>
+            <input id="challanEvidence" type="file" accept="image/*"
+              class="w-full glass p-2 rounded text-white border-white/20 focus:border-blue-500 outline-none text-sm">
+          </div>
+
+          <!-- HIDDEN AMOUNT FIELD (Not relevant for security report) -->
+          <div class="hidden">
+            <label class="text-sm text-gray-400">Fine Amount (₹)</label>
+            <input id="challanAmount" type="number"
+              class="w-full glass p-2 rounded text-white border-white/20 focus:border-blue-500 outline-none" value="0">
+          </div>
+
+          <div id="challanResult" class="hidden p-3 bg-green-500/20 text-green-400 rounded text-sm break-all"></div>
+
+          <div class="flex gap-3 mt-6">
+            <button onclick="document.getElementById('challanModal').classList.add('hidden')"
+              class="flex-1 py-2 rounded border border-gray-600 hover:bg-gray-800 text-gray-400">Cancel</button>
+            <button onclick="issueChallan()"
+              class="flex-1 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-lg shadow-blue-500/30">
+              Submit Report</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+
+
+
+    {% include 'component_chatbot.html' %}
+  </main>
+
+  <!-- MODALS CONTAINER -->
+
+  <!-- PATROL MODAL -->
+  <div id="patrolModal"
+    class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+    <div class="glass p-6 rounded-2xl max-w-sm w-full border border-blue-500/30">
+      <h3 class="text-lg font-bold text-blue-400 mb-4">📍 Log Patrol Point</h3>
+
+      <label class="text-xs text-gray-400">Current Location (GPS)</label>
+      <div class="flex gap-2 mb-4">
+        <input id="patrolLoc" type="text" value="Detecting..."
+          class="glass w-full p-2 text-sm text-white border-white/10 rounded" readonly>
+        <button onclick="detectLocation()"
+          class="p-2 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600 hover:text-white">↻</button>
+      </div>
+
+      <label class="text-xs text-gray-400">Notes / Observations</label>
+      <textarea id="patrolNotes" rows="3"
+        class="glass w-full p-2 text-sm text-white border-white/10 rounded focus:border-blue-500 outline-none mb-6"
+        placeholder="Everything looks normal..."></textarea>
+
+      <div class="flex gap-3">
+        <button onclick="document.getElementById('patrolModal').classList.add('hidden')"
+          class="flex-1 py-2 border border-gray-600 rounded text-gray-400 hover:text-white">Cancel</button>
+        <button onclick="submitPatrolLog()"
+          class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold shadow-lg">Submit Log</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INCIDENT MODAL -->
+  <div id="incidentModal"
+    class="fixed inset-0 bg-black/90 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
+    <div class="glass p-8 rounded-2xl max-w-md w-full border border-red-500/30 shadow-[0_0_30px_rgba(239,68,68,0.2)]">
+      <h2 class="text-xl font-bold text-white mb-6 flex items-center gap-2">
+        <span class="text-red-500">📝</span> Manual Incident Report
+      </h2>
+
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-gray-400">Incident Type</label>
+          <select id="incType"
+            class="w-full glass p-3 rounded text-white border-white/20 bg-black focus:border-red-500 outline-none">
+            <option>General Disturbance</option>
+            <option>Medical Emergency</option>
+            <option>Fire Hazard</option>
+            <option>Vandalism</option>
+            <option>Theft</option>
+            <option>Other</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="text-sm text-gray-400">Location</label>
+          <input id="incLoc" type="text" placeholder="e.g. North Wing, 2nd Floor"
+            class="w-full glass p-3 rounded text-white border-white/20 focus:border-red-500 outline-none">
+        </div>
+
+        <div>
+          <label class="text-sm text-gray-400">Description</label>
+          <textarea id="incDesc" rows="3" placeholder="Describe what happened..."
+            class="w-full glass p-3 rounded text-white border-white/20 focus:border-red-500 outline-none"></textarea>
+        </div>
+
+        <!-- Image Upload Mock -->
+        <div>
+          <label class="text-sm text-gray-400">Attach Photo (Optional)</label>
+          <input type="file" class="text-sm text-gray-400">
+        </div>
+
+        <div class="flex gap-3 mt-4">
+          <button onclick="document.getElementById('incidentModal').classList.add('hidden')"
+            class="flex-1 py-3 border border-gray-600 rounded text-gray-400 hover:text-white">Cancel</button>
+          <button onclick="submitIncident()"
+            class="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow-lg">Report Now</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CAM PREVIEW MODAL -->
+  <div id="camModal" class="fixed inset-0 bg-[#050b07] z-[200] hidden flex flex-col">
+    <div class="flex justify-between items-center p-4 bg-[#0a160f] border-b border-green-500/20">
+      <div class="flex items-center gap-4">
+        <h2 id="camTitle" class="text-xl font-bold text-[#13ec5b] font-mono tracking-tighter">CAM-01 [GATE] - LIVE FEED</h2>
+        <span class="bg-green-500/10 text-green-500 text-[10px] px-2 py-0.5 rounded border border-green-500/30 font-bold">ENLARGED VIEW</span>
+      </div>
+      <button onclick="closeCamModal()"
+        class="text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 w-10 h-10 rounded-full flex items-center justify-center text-2xl">×</button>
+    </div>
+    <div class="flex-1 relative bg-black flex items-center justify-center overflow-hidden group">
+      <!-- Loading Placeholder -->
+      <div id="camLoading" class="absolute inset-0 flex flex-col items-center justify-center bg-black z-10">
+          <div class="w-12 h-12 border-4 border-[#13ec5b]/20 border-t-[#13ec5b] rounded-full animate-spin"></div>
+          <p class="text-xs text-green-500 mt-4 font-mono animate-pulse">CONNECTING TO SECURE FEED...</p>
+      </div>
+
+      <img id="camFullImg" src="" class="w-full h-full object-contain relative z-20"
+           onload="document.getElementById('camLoading').classList.add('hidden')"
+           style="display:block;">
+      
+      <div class="absolute top-8 right-8 z-30 flex flex-col items-end gap-2">
+        <div class="bg-black/60 backdrop-blur-md px-4 py-2 rounded-lg border border-red-500/30 flex items-center gap-3">
+            <div class="w-3 h-3 bg-red-600 rounded-full animate-ping"></div>
+            <span class="text-red-500 font-bold font-mono text-sm">REC LIVE</span>
+        </div>
+        <div id="camOverlayData" class="bg-black/60 backdrop-blur-md px-4 py-2 rounded-lg border border-green-500/30 text-[10px] font-mono text-green-400">
+            SECURE_LINK: ESTABLISHED<br>
+            ENCRYPTION: AES-256<br>
+            BITRATE: 4.2 MBPS
+        </div>
+      </div>
+
+      <!-- Corner Accents -->
+      <div class="absolute top-4 left-4 w-8 h-8 border-t-2 border-l-2 border-green-500/50 z-30"></div>
+      <div class="absolute top-4 right-4 w-8 h-8 border-t-2 border-r-2 border-green-500/50 z-30"></div>
+      <div class="absolute bottom-4 left-4 w-8 h-8 border-b-2 border-l-2 border-green-500/50 z-30"></div>
+      <div class="absolute bottom-4 right-4 w-8 h-8 border-b-2 border-r-2 border-green-500/50 z-30"></div>
+    </div>
+  </div>
+
+  <!-- JS -->
+  <script>
+    /* ---------- NAVIGATION ---------- */
+    function showSection(sectionId, btn) {
+      console.log('Showing section:', sectionId); // Debug line
+
+      // 1. Hide all sections
+      document.querySelectorAll('.section').forEach(sec => {
+        sec.classList.add('hidden');
+      });
+
+      // 2. Remove active state from all buttons
+      document.querySelectorAll('.nav-btn').forEach(b => {
+        b.classList.remove('bg-green-500/10', 'text-green-400', 'border-l-4', 'border-green-500');
+        b.classList.add('text-gray-400', 'hover:bg-white/5');
+      });
+
+      // 3. Show target section
+      const targetSection = document.getElementById(sectionId);
+      if (targetSection) {
+        targetSection.classList.remove('hidden');
+        console.log('Section found and shown:', sectionId);
+      } else {
+        console.error('Section not found:', sectionId);
+      }
+
+      // 4. Set active state on clicked button
+      if (btn) {
+        btn.classList.remove('text-gray-400', 'hover:bg-white/5');
+        btn.classList.add('bg-green-500/10', 'text-green-400', 'border-l-4', 'border-green-500');
+      }
+
+      // 5. Special Case: Map Resize
+      if (sectionId === 'map' && typeof mapInstance !== 'undefined' && mapInstance) {
+        setTimeout(() => { mapInstance.invalidateSize(); }, 200);
+      }
+    }
+
+    /* ---------- NEW FUNCTIONS ---------- */
+
+    // 1. Patrol Log
+    function openPatrolModal() {
+      document.getElementById('patrolModal').classList.remove('hidden');
+      detectLocation();
+    }
+
+    function detectLocation() {
+      const field = document.getElementById('patrolLoc');
+      field.value = "Locating...";
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          field.value = `Lat: ${pos.coords.latitude.toFixed(4)}, Lng: ${pos.coords.longitude.toFixed(4)}`;
+        }, () => {
+          field.value = "GPS Signal Lost (Using Last Known)";
+        });
+      } else {
+        field.value = "Geolocation not supported";
+      }
+    }
+
+    async function submitPatrolLog() {
+      const loc = document.getElementById('patrolLoc').value;
+      const notes = document.getElementById('patrolNotes').value;
+
+      try {
+        await fetch('/api/log_patrol', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ location: loc, notes: notes })
+        });
+        alert("Patrol Logged Successfully!");
+        document.getElementById('patrolModal').classList.add('hidden');
+        document.getElementById('patrolNotes').value = ""; // Reset
+        // Refresh Log if visible
+      } catch (e) { alert("Error logging patrol"); }
+    }
+
+    // 2. Incident Reporting
+    function openIncidentModal() {
+      document.getElementById('incidentModal').classList.remove('hidden');
+    }
+
+    async function submitIncident() {
+      const type = document.getElementById('incType').value;
+      const loc = document.getElementById('incLoc').value;
+      const desc = document.getElementById('incDesc').value;
+
+      if (!loc || !desc) return alert("Please fill location and description");
+
+      const formData = new FormData();
+      formData.append("type", type);
+      formData.append("location", loc);
+      formData.append("description", desc);
+
+      try {
+        await fetch('/api/report_incident', { method: 'POST', body: formData });
+        alert("Incident Reported to Command Center.");
+        document.getElementById('incidentModal').classList.add('hidden');
+      } catch (e) { alert("Submission failed"); }
+    }
+
+    // 3. Camera View
+    let gridPaused = false;
+    function pauseGrid() {
+      if (gridPaused) return;
+      document.querySelectorAll('.cam-feed img').forEach(img => {
+        img.dataset.src = img.src; // Save original
+        img.src = ""; // Stop stream
+      });
+      gridPaused = true;
+    }
+
+    function resumeGrid() {
+      if (!gridPaused) return;
+      document.querySelectorAll('.cam-feed img').forEach(img => {
+        if (img.dataset.src) img.src = img.dataset.src;
+      });
+      gridPaused = false;
+    }
+
+    function viewCamera(title) {
+      pauseGrid(); // Important for browser connection limits
+      
+      document.getElementById('camTitle').textContent = title + " - LIVE FEED";
+      document.getElementById('camLoading').classList.remove('hidden');
+
+      const img = document.getElementById('camFullImg');
+      const idx_map = {
+        'CAM-01': 0, 'CAM-02': 1, 'CAM-03': 2, 'CAM-04': 3,
+        'CAM-05': 4, 'CAM-06': 5, 'CAM-07': 6, 'CAM-08': 7
+      };
+
+      let found = false;
+      for (const [key, val] of Object.entries(idx_map)) {
+        if (title.includes(key)) {
+          // Set stream src directly — NO query params, they break MJPEG streams
+          img.src = `/video_feed/${val}`;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        // Default to cam 0 if title not matched
+        img.src = `/video_feed/0`;
+      }
+
+      // Hide loading spinner as soon as stream begins delivering frames
+      img.onload = () => document.getElementById('camLoading').classList.add('hidden');
+      // For MJPEG streams, onload fires on first frame — fallback timer to remove spinner
+      setTimeout(() => document.getElementById('camLoading').classList.add('hidden'), 1500);
+
+      document.getElementById('camModal').classList.remove('hidden');
+    }
+
+    function closeCamModal() {
+      const modal = document.getElementById('camModal');
+      const img = document.getElementById('camFullImg');
+      img.src = ""; // Stop stream
+      modal.classList.add('hidden');
+      resumeGrid();
+    }
+
+    // 4. AI Alert Simulation
+    async function simulateAIAlert() {
+      try {
+        const kinds = ["loitering", "crowd_rapid", "restricted", "object"];
+        const k = kinds[Math.floor(Math.random() * kinds.length)];
+
+        const res = await fetch('/api/simulate_ai_alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: k })
+        });
+        const data = await res.json();
+
+        // Add card to UI
+        const panel = document.getElementById('aiAlertsPanel');
+        const div = document.createElement('div');
+        div.className = "min-w-[280px] bg-red-900/20 border border-red-500/40 p-3 rounded-xl animate-bounce-in";
+        div.innerHTML = `
+                 <div class="flex justify-between items-start mb-2">
+                     <span class="text-xs font-mono text-red-400">AI-CAM-09</span>
+                     <span class="text-[10px] bg-red-500 text-white px-1.5 rounded">NEW</span>
+                 </div>
+                 <h3 class="font-bold text-sm text-white mb-1">AI Detection</h3>
+                 <p class="text-xs text-gray-400 mb-3">${data.message}</p>
+                 <div class="flex gap-2">
+                     <button onclick="this.parentElement.parentElement.remove()" class="flex-1 bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded">Acknowledge</button>
+                     <button class="flex-1 bg-red-600 text-white text-xs py-1.5 rounded font-bold">Escalate</button>
+                 </div>
+            `;
+        panel.prepend(div);
+
+      } catch (e) { console.error(e); }
+    }
+
+    // 5. Voice Command (Webkit)
+    function startVoiceCommand() {
+      if (!('webkitSpeechRecognition' in window)) {
+        alert("Voice commands are only supported in Chrome/Edge.");
+        return;
+      }
+
+      const btn = document.getElementById('micBtn');
+      const pulse = document.getElementById('micPulse');
+
+      const recognition = new webkitSpeechRecognition();
+      recognition.continuous = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        pulse.classList.remove('opacity-0');
+        btn.classList.add('bg-green-500/20');
+      };
+
+      recognition.onend = () => {
+        pulse.classList.add('opacity-0');
+        btn.classList.remove('bg-green-500/20');
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript.toLowerCase();
+        console.log("Voice Command:", transcript);
+
+        if (transcript.includes("show gate") || transcript.includes("camera 1")) {
+          viewCamera("CAM-01 [GATE]");
+
+        } else if (transcript.includes("log patrol") || transcript.includes("check in")) {
+          openPatrolModal();
+        } else if (transcript.includes("incident") || transcript.includes("report")) {
+          openIncidentModal();
+        } else {
+          alert("Command recognized: " + transcript);
+        }
+      };
+
+      recognition.start();
+    }
+
+    // 6. Enhanced SOS (with Mock Snapshot)
+    async function triggerSOS(type) {
+      // Mock Snapshot (Red canvas)
+      const canvas = document.createElement('canvas');
+      canvas.width = 300; canvas.height = 200;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = "red"; ctx.fillRect(0, 0, 300, 200);
+      const snapshot = canvas.toDataURL(); // Base64
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+          await sendSOS(type, pos.coords.latitude, pos.coords.longitude, snapshot);
+        }, async () => {
+          await sendSOS(type, null, null, snapshot); // Location failed
+        });
+      } else {
+        await sendSOS(type, null, null, snapshot);
+      }
+    }
+
+    async function sendSOS(type, lat, lng, snap) {
+      try {
+        await fetch('/api/sos_alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: type, lat: lat, lng: lng, snapshot: snap })
+        });
+        alert("SOS SENT! BACKUP INBOUND.");
+        closeSOSModal();
+      } catch (e) { alert("SOS FAILED. CALL HQ MANUALLY."); }
+    }
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById("sidebar");
+      const overlay = document.getElementById("overlay");
+
+      sidebar.classList.toggle("-translate-x-full");
+      overlay.classList.toggle("hidden");
+    }
+
+
+    /* Close sidebar after clicking any menu item */
+    /* Event Listeners replaced by direct call in showSection to handle mobile check */
+    /* ---------- SECTION SWITCHING ---------- */
+    function showSection(id, btn) {
+      document.querySelectorAll('.section').forEach(sec => {
+        sec.classList.add('hidden');
+      });
+
+      const target = document.getElementById(id);
+      if (target) target.classList.remove('hidden');
+
+      document.querySelectorAll('.nav-btn').forEach(b => {
+        b.classList.remove('active');
+      });
+      if (btn) btn.classList.add('active');
+
+      // Trigger chart resize if analysis section is shown
+      if (id === 'analysis' && window.myChart) {
+        window.myChart.resize();
+      }
+
+      // Auto-hide sidebar on mobile
+      // Auto-hide sidebar
+      const sidebar = document.getElementById("sidebar");
+      const overlay = document.getElementById("overlay");
+      if (sidebar && !sidebar.classList.contains("-translate-x-full")) {
+        sidebar.classList.add("-translate-x-full");
+        overlay.classList.add("hidden");
+      }
+    }
+
+    function updateOfficerPic(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        localStorage.setItem("officerPic", reader.result);
+        document.getElementById("officerPic").src = reader.result;
+        document.getElementById("officerPicPreview").src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function saveOfficerProfile() {
+      const name = document.getElementById("officerProfileName").value;
+      if (!name) return alert("Name is required");
+
+      try {
+        const res = await fetch('/api/update_profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert("Profile saved successfully!");
+          document.getElementById("officerName").innerText = name; // Update sidebar
+          document.querySelector('h3.text-2xl').innerText = name; // Update profile card
+        } else {
+          alert("Error: " + data.error);
+        }
+      } catch (e) { console.error(e); alert("Server error"); }
+    }
+
+    /* LOAD OFFICER PROFILE DATA */
+    window.addEventListener("load", () => {
+      // Only load picture from local storage if needed. 
+      // Text fields are now populated by server session data.
+      if (localStorage.getItem("officerPic")) {
+        const pic = localStorage.getItem("officerPic");
+        const el1 = document.getElementById("officerPic");
+        const el2 = document.getElementById("officerPicPreview");
+        if (el1) el1.src = pic;
+        if (el2) el2.src = pic;
+      }
+
+      initChart();
+    });
+
+    /* ---------- SEARCH & FILTER ---------- */
+    console.log("Dashboard Script Loaded");
+    /* ---------- SEARCH & FILTER ---------- */
+    // filterRecords defined below in extended block
+
+
+    /* ---------- UPDATE STATUS ---------- */
+    async function updateStatus(id, newStatus) {
+      if (!confirm("Mark this record as Resolved?")) return;
+
+      try {
+        const res = await fetch('/api/update_alert_status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: id, status: newStatus })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // Update UI without reload
+          const statusBadge = document.getElementById(`status-${id}`);
+          if (statusBadge) {
+            statusBadge.innerText = newStatus;
+            statusBadge.className = "py-1 px-2 rounded text-xs font-bold bg-green-500/20 text-green-400";
+          }
+          // Update data attribute for filter
+          const row = statusBadge.closest('tr');
+          if (row) row.setAttribute('data-status', newStatus);
+        } else {
+          alert("Failed to update status: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Server error");
+      }
+    }
+
+    /* ---------- CHALLAN LOGIC ---------- */
+    function openChallanModal() {
+      document.getElementById("challanModal").classList.remove("hidden");
+    }
+
+    function closeChallanModal() {
+      document.getElementById("challanModal").classList.add("hidden");
+      document.getElementById("challanResult").classList.add("hidden");
+      document.getElementById("challanName").value = "";
+    }
+
+    async function issueChallan() {
+      const name = document.getElementById("challanName").value;
+      const reason = document.getElementById("challanReason").value;
+      const amount = document.getElementById("challanAmount").value;
+      const fileInput = document.getElementById("challanEvidence");
+
+      if (!amount || !reason) return alert("Please fill details");
+
+      const formData = new FormData();
+      formData.append("violator_name", name);
+      formData.append("reason", reason);
+      formData.append("amount", amount);
+      if (fileInput.files[0]) {
+        formData.append("evidence", fileInput.files[0]);
+      }
+
+      try {
+        const res = await fetch('/api/issue_challan', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          const resDiv = document.getElementById("challanResult");
+          resDiv.innerHTML = `Fine Issued! <br> <a href="${data.payment_link}" target="_blank" class="underline font-bold">Payment Link</a>`;
+          resDiv.classList.remove("hidden");
+        } else {
+          alert("Error: " + data.error);
+        }
+      } catch (e) {
+        alert("Server Error");
+      }
+    }
+
+    /* ---------- SHARE ALERT ---------- */
+    function shareAlert(message, source) {
+      const text = `ALERT REPORT\nSource: ${source}\nMessage: ${message}\n- NETRA System`;
+      const encodedText = encodeURIComponent(text);
+
+      // Simple selection dialog logic (using browser native for simplicity or creating a modal)
+      // For quick implementation:
+      const choice = prompt("Share via (type number):\n1. WhatsApp\n2. Email", "1");
+
+      if (choice === '1') {
+        window.open(`https://wa.me/?text=${encodedText}`, '_blank');
+      } else if (choice === '2') {
+        window.location.href = `mailto:?subject=NETRA%20Alert&body=${encodedText}`;
+      }
+    }
+
+    async function sendMessage() {
+      // Get Recipient ID from dropdown
+      const recipient = document.getElementById('msgRecipient').value;
+      const content = document.getElementById('msgContent').value;
+
+      if (!recipient) return alert("Please select a recipient.");
+      if (!content.trim()) return alert("Please enter a message.");
+
+      try {
+        const res = await fetch('/api/send_message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiver_id: recipient, content: content })
+        });
+        const data = await res.json();
+        if (data.success) {
+          window.location.reload();
+        } else {
+          alert("Error: " + data.error);
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Failed to send message.");
+      }
+    }
+
+    /* ---------- CHART.JS ---------- */
+    function initChart() {
+      const ctx = document.getElementById('severityChart');
+      if (!ctx) return;
+
+      // Count severities from table (or jinja injected)
+      // We will parse the rows to be dynamic
+      let high = 0, med = 0, low = 0;
+      document.querySelectorAll('.record-row').forEach(row => {
+        const html = row.innerHTML;
+        if (html.includes('CRITICAL')) high++;
+        else if (html.includes('WARNING')) med++;
+        else low++;
+      });
+
+      window.myChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: ['Critical', 'Warning', 'Info'],
+          datasets: [{
+            data: [high, med, low],
+            backgroundColor: ['#ef4444', '#facc15', '#22c55e'],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { color: '#fff' }
+            }
+          }
+        }
+      });
+    }
+
+    /* ---------- REAL-TIME AI ALERTS ---------- */
+    let processedAlertIds = new Set();
+
+    async function pollRealAIAlerts() {
+      try {
+        const res = await fetch('/api/get_recent_alerts');
+        const alerts = await res.json();
+
+        const panel = document.getElementById('aiAlertsPanel');
+        if (!panel) return;
+
+        alerts.forEach(alert => {
+          if (!processedAlertIds.has(alert.id)) {
+            processedAlertIds.add(alert.id);
+
+            // Only show AI/Camera alerts here
+            const sourceName = alert.source.toUpperCase();
+            if (sourceName.includes('CAM') || sourceName.includes('GATE') || sourceName.includes('AI')) {
+              const div = document.createElement('div');
+              div.className = "min-w-[280px] bg-red-900/20 border border-red-500/40 p-3 rounded-xl animate-bounce-in";
+              div.innerHTML = `
+                  <div class="flex justify-between items-start mb-2">
+                      <span class="text-xs font-mono text-red-400">${alert.source}</span>
+                      <span class="text-[10px] bg-red-500 text-white px-1.5 rounded">REAL-TIME</span>
+                  </div>
+                  <h3 class="font-bold text-sm text-white mb-1">AI Detection</h3>
+                  <p class="text-xs text-gray-400 mb-3">${alert.message}</p>
+                  <div class="flex gap-2">
+                      <button onclick="updateStatus(${alert.id}, 'Resolved'); this.parentElement.parentElement.remove();" class="flex-1 bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded">Acknowledge</button>
+                      <button class="flex-1 bg-red-600 text-white text-xs py-1.5 rounded font-bold">Escalate</button>
+                  </div>
+              `;
+              panel.prepend(div);
+
+              // Play alert sound if it's critical
+              if (alert.severity === 'Critical') {
+                const audio = new Audio('https://www.soundjay.com/buttons/beep-01a.mp3');
+                audio.play().catch(e => { });
+              }
+            }
+          }
+        });
+      } catch (e) { console.error("Alert poll error", e); }
+    }
+
+    /* ---------- POLLING & NOTIFICATIONS ---------- */
+    let lastMsgId = 0;
+
+    async function pollState() {
+      try {
+        // 1. Sync State (Messages)
+        const res = await fetch('/api/sync_state');
+        if (res.ok) {
+          const data = await res.json();
+          if (lastMsgId === 0) lastMsgId = data.latest_msg_id;
+          // Message logic handled typically by chat reload, here we just track ID
+        }
+
+        // 2. Fetch Notifications
+        fetchNotifications();
+
+      } catch (e) { console.error("Poll error", e); }
+    }
+
+    async function fetchNotifications() {
+      try {
+        const res = await fetch('/api/get_notifications');
+        const notifs = await res.json();
+
+        const list = document.getElementById('notificationList');
+        const dots = document.querySelectorAll('#notificationDot, #messageDot');
+
+        if (notifs.length === 0) {
+          list.innerHTML = '<p class="text-center text-gray-500 text-xs py-4">No notifications.</p>';
+          dots.forEach(d => d.classList.add('hidden'));
+          return;
+        }
+
+        let hasUnread = false;
+        let html = '';
+
+        notifs.forEach(n => {
+          if (!n.is_read) hasUnread = true;
+          const bg = n.is_read ? 'opacity-50' : 'bg-white/5';
+          html += `
+                  <div class="p-2 border-b border-white/5 last:border-0 ${bg} hover:bg-white/10 transition cursor-pointer" onclick="markRead(${n.id})">
+                    <p class="text-sm text-gray-200">${n.message}</p>
+                    <p class="text-[10px] text-gray-500 mt-1">${n.created_at}</p>
+                  </div>
+                `;
+        });
+
+        list.innerHTML = html;
+
+        if (hasUnread) dots.forEach(d => d.classList.remove('hidden'));
+        else dots.forEach(d => d.classList.add('hidden'));
+
+      } catch (e) { console.error(e); }
+    }
+
+    async function markRead(id) {
+      try {
+        await fetch('/api/mark_notification_read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: id })
+        });
+        fetchNotifications(); // Refresh
+      } catch (e) { }
+    }
+
+    async function markAllRead() {
+      // ideally batch mark, for now just poll
+      // Implement batch endpoint if needed, or iterate
+    }
+
+    function markSeen() {
+      // logic integrated in fetchNotifications
+    }
+
+    setInterval(pollState, 5000);
+    setInterval(pollRealAIAlerts, 3000);
+    pollState();
+    pollRealAIAlerts();
+
+    /* ---------- LEAFLET MAP ---------- */
+    /* ---------- LEAFLET MAP ---------- */
+    // Initialize map when section is shown or on load (but ideally when shown to handle resizing)
+    let mapInstance = null;
+    let heatLayer = null;
+
+    function initMap() {
+      if (mapInstance) return;
+      // Mock coords: 28.6139, 77.2090 (Connaught Place, Delhi) as base
+      mapInstance = L.map('officerMap').setView([28.6139, 77.2090], 13);
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 20
+      }).addTo(mapInstance);
+
+      // Add markers
+      L.marker([28.6139, 77.2090]).addTo(mapInstance)
+        .bindPopup("<b>HQ</b><br>Command Center").openPopup();
+
+      // Dummy Officers
+      const officers = [
+        { lat: 28.6129, lng: 77.2100, name: "Officer Alpha" },
+        { lat: 28.6149, lng: 77.2080, name: "Officer Bravo" },
+        { lat: 28.6150, lng: 77.2110, name: "Officer Charlie" }
+      ];
+
+      officers.forEach(off => {
+        L.circleMarker([off.lat, off.lng], {
+          color: '#13ec5b',
+          fillColor: '#13ec5b',
+          fillOpacity: 0.5,
+          radius: 8
+        }).addTo(mapInstance).bindTooltip(off.name);
+      });
+
+      // Auto-load heatmap
+      setTimeout(toggleHeatmap, 500);
+    }
+
+    async function toggleHeatmap() {
+      if (!mapInstance) return;
+
+      if (heatLayer) {
+        mapInstance.removeLayer(heatLayer);
+        heatLayer = null;
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/heatmap_data');
+        const points = await res.json();
+
+        // Points format: [lat, lng, intensity]
+        heatLayer = L.heatLayer(points, {
+          radius: 30, // Increased radius
+          blur: 20,
+          maxZoom: 17,
+          gradient: { 0.2: 'blue', 0.4: 'cyan', 0.6: 'lime', 0.8: 'yellow', 1.0: 'red' } // More vibrant gradient
+        }).addTo(mapInstance);
+
+      } catch (e) {
+        console.error("Failed to load heatmap data", e);
+      }
+    }
+
+    // Language Helper
+    function setLang(code, name) {
+      changeLanguage(code);
+      document.getElementById('currentLangLabel').innerText = name;
+      // Close dropdown (css group-hover handles it, but creating a cleaner UI might need JS, for now CSS hover is fine as requested "scrolling button")
+      // To persist label on load:
+      localStorage.setItem('netra_lang_name', name);
+    }
+
+    // On load, set label
+    window.addEventListener('load', () => {
+      const name = localStorage.getItem('netra_lang_name') || 'English';
+      const label = document.getElementById('currentLangLabel');
+      if (label) label.innerText = name;
+    });
+
+    // Hook into showSection to ensuring map renders correctly
+    const originalShowSection = showSection;
+    showSection = function (id, btn) {
+      originalShowSection(id, btn);
+      if (id === 'map') {
+        setTimeout(() => {
+          if (!mapInstance) initMap();
+          mapInstance.invalidateSize();
+        }, 100);
+      }
+    }
+
+    // Original script end point - merging with extended functions
+
+
+
+
+
+    /* ---------- CREATE CASE ---------- */
+    function openCreateCaseModal() {
+      document.getElementById('createCaseModal').classList.remove('hidden');
+    }
+
+    function closeCreateCaseModal() {
+      document.getElementById('createCaseModal').classList.add('hidden');
+    }
+
+    async function createCase() {
+      const title = document.getElementById('caseTitle').value;
+      const desc = document.getElementById('caseDesc').value;
+
+      if (!title) return alert("Title is required");
+
+      try {
+        const res = await fetch('/api/create_case', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: title, description: desc })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          alert("Case created successfully!");
+          window.location.reload();
+        } else {
+          alert("Error: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Server error");
+      }
+    }
+
+    /* ---------- CASE DETAILS & EVIDENCE ---------- */
+    let currentCaseDbId = null; // Store for upload
+
+    async function openCaseDetails(caseId) { // caseId here is case_id string (e.g. NETRA-202X...)
+      const modal = document.getElementById('caseDetailsModal');
+      modal.classList.remove('hidden');
+
+      // Reset UI
+      document.getElementById('cdTitle').innerText = "Loading...";
+      document.getElementById('cdDesc').innerText = "...";
+      document.getElementById('evidenceListBody').innerHTML = "";
+      document.getElementById('noEvidenceMsg').classList.remove('hidden');
+      cancelUpload();
+
+      try {
+        const res = await fetch(`/api/get_case_details/${caseId}`);
+        const data = await res.json();
+
+        if (data.success) {
+          const c = data.case;
+          currentCaseDbId = c.id; // Store int ID for uploads
+
+          document.getElementById('cdTitle').innerText = `${c.case_id}: ${c.title}`;
+          document.getElementById('cdStatus').innerText = `Status: ${c.status} | Officer: ${c.officer_name}`;
+          document.getElementById('cdDesc').innerText = c.description || "No description.";
+
+          // Populate Evidence
+          const tbody = document.getElementById('evidenceListBody');
+          tbody.innerHTML = "";
+
+          if (data.evidence && data.evidence.length > 0) {
+            document.getElementById('noEvidenceMsg').classList.add('hidden');
+            data.evidence.forEach(e => {
+              const row = document.createElement('tr');
+              row.className = "border-b border-white/5 hover:bg-white/5";
+
+              // Determine preview link
+              // Path in DB is like static/evidence/...
+              // Clean up path if needed
+              let webPath = e.file_path; // Assuming path stored is relative relative to root or static? 
+              // In upload_evidence we stored: static/evidence/...
+              // Flask static url needs: /static/evidence/...
+              // Ideally use url_for but in JS we construct it.
+
+              const rowHtml = `
+                <td class="p-3 text-blue-300 truncate max-w-xs" title="${webPath}">${webPath.split('/').pop()}</td>
+                <td class="p-3 uppercase text-xs text-gray-400">${e.file_type}</td>
+                <td class="p-3">${e.tags || '-'}</td>
+                <td class="p-3">
+                  <span class="px-2 py-0.5 rounded text-[10px] border 
+                    ${e.status === 'Verified' ? 'border-green-500/30 text-green-400' : 'border-yellow-500/30 text-yellow-400'}">
+                    ${e.status}
+                  </span>
+                </td>
+                <td class="p-3 text-gray-500 text-xs">${e.created_at}</td>
+                <td class="p-3 flex gap-2">
+                  <a href="/${webPath}" target="_blank" class="text-xs bg-white/10 hover:bg-white/20 px-2 py-1 rounded">View</a>
+                  <button onclick="openFeedbackModal(${e.id})" class="text-[10px] text-purple-400 border border-purple-500/30 px-2 py-1 rounded hover:bg-purple-500/10">Rate AI</button>
+                </td>
+              `;
+              row.innerHTML = rowHtml;
+              tbody.appendChild(row);
+            });
+          }
+        } else {
+          alert("Failed to load case details.");
+          closeCaseDetailsModal();
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Error loading details");
+      }
+    }
+
+    function closeCaseDetailsModal() {
+      document.getElementById('caseDetailsModal').classList.add('hidden');
+    }
+
+
+
+    function closeCaseDetailsModal() {
+      document.getElementById('caseDetailsModal').classList.add('hidden');
+    }
+
+    /* --- UPLOAD LOGIC --- */
+    function handleEvidenceSelection(input) {
+      if (input.files && input.files[0]) {
+        document.getElementById('uploadPreview').classList.remove('hidden');
+        document.getElementById('fileName').innerText = input.files[0].name;
+      }
+    }
+
+    function cancelUpload() {
+      document.getElementById('evidenceUpload').value = "";
+      document.getElementById('evidenceTags').value = "";
+      document.getElementById('uploadPreview').classList.add('hidden');
+    }
+
+    async function uploadEvidence() {
+      const fileInput = document.getElementById('evidenceUpload');
+      const tags = document.getElementById('evidenceTags').value;
+
+      if (!fileInput.files[0]) return;
+      if (!currentCaseDbId) return alert("Case ID missing error.");
+
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("case_db_id", currentCaseDbId);
+      formData.append("tags", tags);
+
+      const btn = event.target;
+      const originalText = btn.innerText;
+      btn.innerText = "Uploading...";
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/upload_evidence', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          alert("Evidence uploaded successfully!");
+          closeCaseDetailsModal();
+        } else {
+          alert("Upload failed: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Server error during upload");
+      } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+      }
+    }
+
+    /* --- AI FEEDBACK --- */
+    function openFeedbackModal(evidenceId) {
+      document.getElementById('aiFeedbackModal').classList.remove('hidden');
+      document.getElementById('feedbackEvidenceId').value = evidenceId;
+      document.getElementById('feedbackComment').value = "";
+    }
+
+    function closeFeedbackModal() {
+      document.getElementById('aiFeedbackModal').classList.add('hidden');
+    }
+
+    async function submitFeedback(type) {
+      const evidenceId = document.getElementById('feedbackEvidenceId').value;
+      const comment = document.getElementById('feedbackComment').value;
+
+      try {
+        const res = await fetch('/api/submit_ai_feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            evidence_id: evidenceId,
+            feedback: type,
+            comments: comment
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert("Feedback recorded. Thank you for improving NETRA AI.");
+          closeFeedbackModal();
+        } else {
+          alert("Error: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+
+    function cancelUpload() {
+      document.getElementById('evidenceUpload').value = "";
+      document.getElementById('evidenceTags').value = "";
+      document.getElementById('uploadPreview').classList.add('hidden');
+    }
+
+    async function uploadEvidence() {
+      const fileInput = document.getElementById('evidenceUpload');
+      const tags = document.getElementById('evidenceTags').value;
+
+      if (!fileInput.files[0]) return;
+      if (!currentCaseDbId) return alert("Case ID missing error.");
+
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("case_db_id", currentCaseDbId);
+      formData.append("tags", tags);
+
+      const btn = event.target;
+      const originalText = btn.innerText;
+      btn.innerText = "Uploading...";
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/upload_evidence', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // Refresh details
+          // We need the string case ID to re-call openCaseDetails or just reload. 
+          // Since openCaseDetails uses string ID and we only have int ID here easily 
+          // (Wait, we do have string ID in the title but easier to just reload page or fetch specific evidence row).
+          // Simplest: Close and Alert
+          alert("Evidence uploaded successfully!");
+          closeCaseDetailsModal();
+          // Or ideally: Reload the modal content.
+        } else {
+          alert("Upload failed: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Server error during upload");
+      } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+      }
+    }
+
+
+
+    /* --- QUICK ACTIONS --- */
+    async function triggerAction(type) {
+      if (!confirm(`Are you sure you want to trigger: ${type.toUpperCase()}?`)) return;
+
+      try {
+        const res = await fetch('/api/quick_action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: type })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          // Custom "Toast" or just a better alert for now
+          // Using a mock-toast by reusing an element or simple alert
+          alert(`✅ ACTION CONFIRMED\n\n${data.message}\n\nAlert sent to all field officers.`);
+        } else {
+          alert("Action Failed: " + data.error);
+        }
+      } catch (e) {
+        console.error(e);
+        alert("Server Error");
+      }
+    }
+
+    async function stopBuzzer() {
+      try {
+        const res = await fetch('/api/stop_buzzer', {
+          method: 'POST'
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert("Buzzer system has been deactivated.");
+        }
+      } catch (e) { console.error(e); }
+    }
+
+
+
+
+
+    /* --- SEARCH & FILTER --- */
+    function filterRecords() {
+      const query = document.getElementById('recordSearch').value.toLowerCase();
+      const statusFilter = document.getElementById('recordFilter').value;
+      const rows = document.querySelectorAll('.record-row');
+
+      rows.forEach(row => {
+        const content = row.getAttribute('data-content').toLowerCase();
+        const status = row.getAttribute('data-status');
+
+        const matchQuery = content.includes(query);
+        const matchStatus = (statusFilter === 'all') || (status === statusFilter);
+
+        if (matchQuery && matchStatus) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    }
+
+    function exportReports() {
+      const rows = document.querySelectorAll("#recordsTableBody tr");
+      let csv = "ID,Time,Source,Message,Severity,Status\n";
+
+      rows.forEach(row => {
+        const cols = row.querySelectorAll("td");
+        if (cols.length > 5) {
+          let id = cols[0].innerText.trim();
+          let time = cols[1].innerText.trim();
+          let source = cols[2].innerText.trim();
+          let msg = cols[3].innerText.trim().replace(/,/g, ' ');
+          let sev = cols[4].innerText.trim();
+          let stat = cols[5].innerText.trim();
+          csv += `${id},${time},${source},${msg},${sev},${stat}\n`;
+        }
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.setAttribute('hidden', '');
+      a.setAttribute('href', url);
+      a.setAttribute('download', 'officer_reports.csv');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      alert("Report Downloaded Successfully!");
+    }
+
+
+    /* --- NAVIGATION --- */
+    function navigateToAlert(message) {
+      // Regex to find "Location lat, lng" pattern
+      // Matches "Location 28.123, 77.456" or similar
+      const coordRegex = /Location\s*([\d\.]+),\s*([\d\.]+)/i;
+      const match = message.match(coordRegex);
+
+      if (match) {
+        const lat = match[1];
+        const lng = match[2];
+        const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+        window.open(url, '_blank');
+      } else {
+        // Fallback: If no coords found, search the message text or just open maps
+        // Searching message text might yield results if it contains a place name
+        const encodedMsg = encodeURIComponent(message);
+        const url = `https://www.google.com/maps/search/?api=1&query=${encodedMsg}`;
+
+        if (confirm(`No precise coordinates found in alert. Search Google Maps for "${message}"?`)) {
+          window.open(url, '_blank');
+        }
+      }
+    }
+
+    /* --- NEW FUNCTIONS (REFRESHED) --- */
+
+    // 1. Verify Entry (Visitor Search)
+    async function verifyVisitor() {
+      const name = document.getElementById('vizName').value;
+      const phone = document.getElementById('vizPhone').value;
+      const resDiv = document.getElementById('verifyResult');
+
+      if (!name || !phone) return alert("Please enter both Name and Phone Number");
+
+      resDiv.classList.remove('hidden');
+      resDiv.innerHTML = '<p class="text-white animate-pulse text-center">Searching Database...</p>';
+
+      try {
+        const res = await fetch('/api/verify_visitor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, phone: phone })
+        });
+        const data = await res.json();
+
+        if (data.success && data.status === "granted") {
+          resDiv.innerHTML = `
+                <div class="bg-green-500/20 border border-green-500 p-4 rounded-xl animate-bounce-in flex gap-4 items-center">
+                    <div class="text-4xl">✅</div>
+                    <div class="text-left">
+                        <h3 class="text-xl font-bold text-green-400">ACCESS GRANTED</h3>
+                        <p class="text-white text-sm">Visitor: <span class="font-bold">${data.visitor.name}</span></p>
+                        <p class="text-green-200 text-xs">ID Verified • ${data.visitor.status}</p>
+                    </div>
+                </div>
+            `;
+        } else {
+          resDiv.innerHTML = `
+                <div class="bg-red-500/20 border border-red-500 p-4 rounded-xl animate-shake flex gap-4 items-center">
+                    <div class="text-4xl">🚫</div>
+                    <div class="text-left">
+                        <h3 class="text-xl font-bold text-red-500">ACCESS DENIED</h3>
+                        <p class="text-white text-sm">Visitor: <span class="font-bold">${name}</span></p>
+                        <p class="text-red-200 text-xs">${data.message}</p>
+                    </div>
+                </div>
+            `;
+        }
+      } catch (e) {
+        console.error(e);
+        resDiv.innerHTML = '<p class="text-red-500 text-center">Server Error during verification.</p>';
+      }
+    }
+
+    // 2. Settings Logic
+    function saveSettings() {
+      const notif = document.getElementById('settNotif').checked;
+      const dark = document.getElementById('settDark').checked;
+      const vol = document.getElementById('settVol').value;
+
+      localStorage.setItem('netra_pref_notif', notif);
+      localStorage.setItem('netra_pref_dark', dark);
+      localStorage.setItem('netra_pref_vol', vol);
+
+      console.log('Settings saved:', { notif, dark, vol });
+      alert('Settings saved successfully!');
+    }
+
+    function loadSettings() {
+      console.log('Loading settings...');
+      if (localStorage.getItem('netra_pref_dark')) {
+        const dark = (localStorage.getItem('netra_pref_dark') === 'true');
+        document.getElementById('settDark').checked = dark;
+        toggleDarkMode({ checked: dark });
+      }
+      if (localStorage.getItem('netra_pref_vol')) {
+        document.getElementById('settVol').value = localStorage.getItem('netra_pref_vol');
+      }
+      if (localStorage.getItem('netra_pref_notif')) {
+        document.getElementById('settNotif').checked = localStorage.getItem('netra_pref_notif') === 'true';
+      }
+      console.log('Settings loaded');
+    }
+
+    function toggleDarkMode(checkbox) {
+      // Assuming 'dark' class on HTML or BODY affects some global styles, OR we just set a specific class
+      if (checkbox.checked || (typeof checkbox === 'boolean' && checkbox)) {
+        document.body.classList.add('bg-black');
+        document.body.classList.remove('bg-[#050b07]');
+        // Add specific dark overrides if needed, or rely on existing style logic
+      } else {
+        document.body.classList.remove('bg-black');
+        document.body.classList.add('bg-[#050b07]');
+      }
+    }
+
+    // Load settings on init
+    window.addEventListener('load', loadSettings);
+
+  </script>
+
+
+  <!-- SMART ROUTE MODAL -->
+  <div id="routeModal" class="fixed inset-0 bg-black/80 z-50 hidden flex items-center justify-center backdrop-blur-sm">
+    <div class="bg-[#0a160f] border border-[#13ec5b]/30 p-6 rounded-xl w-full max-w-2xl shadow-2xl relative">
+      <button onclick="closeRouteModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white">&times;</button>
+      <h2 class="text-2xl font-bold mb-4 text-[#13ec5b]">Smart Route Recommendation</h2>
+
+      <div class="flex gap-4 mb-4">
+        <select id="startNode" class="flex-1 bg-black/30 border border-green-800 rounded p-2 text-white">
+          <option value="Gate A">Gate A</option>
+          <option value="Lobby">Lobby</option>
+          <option value="Corridor 1">Corridor 1</option>
+          <option value="Cafeteria">Cafeteria</option>
+          <option value="Exit B">Exit B</option>
+          <option value="Parking">Parking</option>
+        </select>
+        <span class="text-gray-400 self-center">&rarr;</span>
+        <select id="endNode" class="flex-1 bg-black/30 border border-green-800 rounded p-2 text-white">
+          <option value="Exit B">Exit B</option>
+          <option value="Parking">Parking</option>
+          <option value="Gate A">Gate A</option>
+          <option value="Lobby">Lobby</option>
+          <option value="Corridor 1">Corridor 1</option>
+          <option value="Cafeteria">Cafeteria</option>
+        </select>
+        <button onclick="calculateRoute()" class="bg-[#13ec5b] text-black font-bold px-4 rounded hover:bg-green-400">
+          Find Path
+        </button>
+      </div>
+
+      <div class="relative bg-black/50 h-80 rounded border border-white/10 flex items-center justify-center p-4">
+        <canvas id="routeCanvas" class="w-full h-full"></canvas>
+        <div id="routeText"
+          class="absolute bottom-2 left-2 bg-black/70 px-2 py-1 rounded text-xs text-green-300 hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OFFLINE INDICATOR -->
+  <div id="offlineIndicator"
+    class="fixed bottom-4 right-4 bg-red-600 text-white px-4 py-2 rounded shadow-lg hidden z-50 animate-pulse">
+    ⚠ You are Offline. Data will sync when online.
+  </div>
+  <div id="syncIndicator" class="fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded shadow-lg hidden z-50">
+    ↻ Syncing Data...
+  </div>
+
+  <script>
+    function openRouteModal() { document.getElementById('routeModal').classList.remove('hidden'); initRouteCanvas(); }
+    function closeRouteModal() { document.getElementById('routeModal').classList.add('hidden'); }
+
+    // --- SMART ROUTE LOGIC ---
+    const venueGraph = {
+      "Gate A": { "Lobby": 10, "Parking": 5 },
+      "Lobby": { "Gate A": 10, "Corridor 1": 8, "Cafeteria": 12 },
+      "Corridor 1": { "Lobby": 8, "Exit B": 6, "Cafeteria": 5 },
+      "Cafeteria": { "Lobby": 12, "Corridor 1": 5 },
+      "Exit B": { "Corridor 1": 6, "Parking": 15 },
+      "Parking": { "Gate A": 5, "Exit B": 15 }
+    };
+
+    const nodeCoords = {
+      "Gate A": { x: 10, y: 50 },
+      "Lobby": { x: 30, y: 50 },
+      "Corridor 1": { x: 60, y: 50 },
+      "Cafeteria": { x: 60, y: 20 },
+      "Exit B": { x: 90, y: 50 },
+      "Parking": { x: 50, y: 90 }
+    };
+
+    let crowdData = {};
+
+    function initRouteCanvas() {
+      drawRoute([]);
+    }
+
+    async function calculateRoute() {
+      const start = document.getElementById('startNode').value;
+      const end = document.getElementById('endNode').value;
+
+      if (start === end) { alert("Start and End cannot be same."); return; }
+
+      try {
+        const res = await fetch('/api/crowd_status');
+        const data = await res.json();
+        data.forEach(n => crowdData[n.name] = n.density);
+      } catch (e) {
+        console.error("Failed to fetch crowd data", e);
+        Object.keys(venueGraph).forEach(k => crowdData[k] = Math.random() * 100);
+      }
+
+      const graph = venueGraph;
+      const costs = {};
+      const processed = [];
+      const parents = {};
+
+      Object.keys(graph).forEach(node => {
+        if (node === start) costs[node] = 0;
+        else costs[node] = Infinity;
+      });
+
+      let node = findLowestCostNode(costs, processed);
+
+      while (node) {
+        const cost = costs[node];
+        const neighbors = graph[node];
+        Object.keys(neighbors).forEach(n => {
+          let density = crowdData[n] || 0;
+          let weight = neighbors[n] + (density * 0.5);
+          let newCost = cost + weight;
+          if (newCost < costs[n]) {
+            costs[n] = newCost;
+            parents[n] = node;
+          }
+        });
+        processed.push(node);
+        node = findLowestCostNode(costs, processed);
+      }
+
+      let path = [end];
+      let parent = parents[end];
+      while (parent) {
+        path.push(parent);
+        parent = parents[parent];
+      }
+      path.reverse();
+
+      if (path[0] !== start) { alert("No path found!"); return; }
+
+      drawRoute(path);
+      const routeStr = path.join(" > ");
+      document.getElementById('routeText').innerText = "Recommended Route: " + routeStr;
+      document.getElementById('routeText').classList.remove('hidden');
+    }
+
+    function findLowestCostNode(costs, processed) {
+      let lowest = Infinity;
+      let lowestNode = null;
+      Object.keys(costs).forEach(node => {
+        let cost = costs[node];
+        if (cost < lowest && !processed.includes(node)) {
+          lowest = cost;
+          lowestNode = node;
+        }
+      });
+      return lowestNode;
+    }
+
+    function drawRoute(path) {
+      const canvas = document.getElementById('routeCanvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 2;
+
+      Object.keys(venueGraph).forEach(node => {
+        const neighbors = venueGraph[node];
+        const startPos = nodeCoords[node];
+        Object.keys(neighbors).forEach(n => {
+          const endPos = nodeCoords[n];
+          ctx.beginPath();
+          ctx.moveTo(startPos.x * w / 100, startPos.y * h / 100);
+          ctx.lineTo(endPos.x * w / 100, endPos.y * h / 100);
+          ctx.stroke();
+        });
+      });
+
+      if (path.length > 1) {
+        ctx.strokeStyle = '#13ec5b';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        let startPos = nodeCoords[path[0]];
+        ctx.moveTo(startPos.x * w / 100, startPos.y * h / 100);
+        for (let i = 1; i < path.length; i++) {
+          let p = nodeCoords[path[i]];
+          ctx.lineTo(p.x * w / 100, p.y * h / 100);
+        }
+        ctx.stroke();
+      }
+
+      Object.keys(nodeCoords).forEach(node => {
+        const pos = nodeCoords[node];
+        const x = pos.x * w / 100;
+        const y = pos.y * h / 100;
+        let density = crowdData[node] || 0;
+        let color = '#22c55e';
+        if (density > 50) color = '#eab308';
+        if (density > 80) color = '#ef4444';
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px Arial';
+        ctx.fillText(node, x - 15, y - 15);
+        if (crowdData[node] !== undefined) {
+          ctx.fillStyle = '#ccc';
+          ctx.fillText(Math.floor(density) + '%', x - 10, y + 20);
+        }
+      });
+    }
+
+    // --- SERVICE WORKER & OFFLINE SYNC ---
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/static/sw.js?v=4').then(reg => {
+          console.log('SW Registered');
+        }).catch(err => console.log('SW Error', err));
+      });
+    }
+
+    // IndexedDB Setup
+    const dbName = 'NetraOfflineDB';
+    let db;
+    const request = indexedDB.open(dbName, 1);
+    request.onupgradeneeded = function (event) {
+      db = event.target.result;
+      if (!db.objectStoreNames.contains('logs')) {
+        db.createObjectStore('logs', { autoIncrement: true });
+      }
+    };
+    request.onsuccess = function (event) { db = event.target.result; };
+
+    // Network Status
+    window.addEventListener('offline', () => {
+      document.getElementById('offlineIndicator').classList.remove('hidden');
+    });
+    window.addEventListener('online', () => {
+      document.getElementById('offlineIndicator').classList.add('hidden');
+      document.getElementById('syncIndicator').classList.remove('hidden');
+      syncData();
+    });
+
+    // Override fetch for key actions to store offline
+    // NOTE: This triggers on 'logPatrol' call.
+
+    // Original logPatrol function needs to be aware of offline.
+    // We can wrap it or just check navigator.onLine inside it, but existing code is inside <head> script.
+    // We can override window.logPatrol here?
+    const originalLogPatrol = window.logPatrol;
+    window.logPatrol = async function () {
+      if (!navigator.onLine) {
+        if (!confirm("Offline Mode: Save Patrol Log locally?")) return;
+        const loc = "Lat: 28.61, Lng: 77.21 (Offline Cache)";
+        saveToIndexedDB({ type: 'patrol', data: { location: loc }, time: new Date() });
+        alert("Saved to Offline Storage. Will sync when online.");
+        return;
+      }
+      return originalLogPatrol();
+    };
+
+    function saveToIndexedDB(item) {
+      const transaction = db.transaction(['logs'], 'readwrite');
+      const store = transaction.objectStore('logs');
+      store.add(item);
+    }
+
+    function syncData() {
+      if (!db) return;
+      const transaction = db.transaction(['logs'], 'readwrite');
+      const store = transaction.objectStore('logs');
+      const req = store.getAll();
+
+      req.onsuccess = function () {
+        const items = req.result;
+        if (items.length === 0) {
+          document.getElementById('syncIndicator').classList.add('hidden');
+          return;
+        }
+
+        let syncedCount = 0;
+        items.forEach(item => {
+          if (item.type === 'patrol') {
+            fetch('/api/log_patrol', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(item.data)
+            }).then(() => {
+              syncedCount++;
+              if (syncedCount === items.length) {
+                // Clear DB
+                const tx = db.transaction(['logs'], 'readwrite');
+                tx.objectStore('logs').clear();
+                document.getElementById('syncIndicator').classList.add('hidden');
+                alert("App Synced " + syncedCount + " offline items.");
+              }
+            });
+          }
+        });
+      };
+    }
+  </script>
+
+  <script src="{{ url_for('static', filename='js/translations.js') }}"></script>
+</body>
+
+
+</html>

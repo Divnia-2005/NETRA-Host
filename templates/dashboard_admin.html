@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Dashboard — NETRA</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js" crossorigin=""></script>
+  <script>
+    function logout() {
+      // Explicitly kill all video streams to free up browser connection limits
+      // Using .remove() is safe and guarantees the stream connection is dropped
+      // without triggering an empty URL request like img.src = '' did.
+      document.querySelectorAll('img[src*="/video_feed/"]').forEach(img => {
+          img.parentNode.removeChild(img);
+      });
+      
+      if (window.stop) window.stop();
+      
+      // Small delay allows browser to close TCP connections before new request
+      setTimeout(() => {
+          window.location.href = '/logout';
+      }, 150);
+    }
+  </script>
+  <!-- Google Fonts: Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .glass:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .gradient-text {
+      background: linear-gradient(to right, #4ade80, #22d3ee);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .cam-feed {
+      background-color: #000;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .cam-overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: rgba(0, 255, 0, 0.8);
+      font-family: monospace;
+      font-size: 0.75rem;
+      z-index: 10;
+      text-shadow: 0 0 2px black;
+    }
+
+    .rec-indicator {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: sans-serif;
+      font-size: 0.7rem;
+      color: white;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 2px 6px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+
+    .rec-dot {
+      width: 8px;
+      height: 8px;
+      background-color: red;
+      border-radius: 50%;
+      animation: blink 1.5s infinite;
+    }
+
+    @keyframes blink {
+      0% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0;
+      }
+
+      100% {
+        opacity: 1;
+      }
+    }
+
+    .scan-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 4px;
+      background: rgba(0, 255, 100, 0.3);
+      box-shadow: 0 0 10px rgba(0, 255, 100, 0.5);
+      animation: scan 4s linear infinite;
+      opacity: 0.5;
+      z-index: 5;
+    }
+
+    @keyframes scan {
+      0% {
+        top: -10%;
+      }
+
+      100% {
+        top: 110%;
+      }
+    }
+
+    .crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px;
+      height: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      opacity: 0.5;
+    }
+
+    .crosshair::before,
+    .crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .crosshair::before {
+      top: 9px;
+      left: 0;
+      width: 100%;
+      height: 1px;
+    }
+
+    .crosshair::after {
+      left: 9px;
+      top: 0;
+      height: 100%;
+      width: 1px;
+    }
+  </style>
+</head>
+
+<body
+  class="bg-[#050b07] bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-[#0f2818] via-[#050b07] to-black text-white h-screen flex overflow-hidden">
+  <!-- TOP NAVBAR -->
+  <header class="fixed top-0 left-0 right-0 z-50 h-14
+               flex items-center gap-4
+               bg-[#102216] border-b border-green-900 px-4">
+
+    <!-- Hamburger -->
+    <button onclick="toggleSidebar()" class="text-[#13ec5b] focus:outline-none">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+        stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    </button>
+
+    <span class="font-bold text-[#13ec5b] text-lg flex-1" data-i18n="netra_admin">
+      NETRA Admin
+    </span>
+
+    <!-- Custom Language Selector -->
+    <div class="relative mr-4 group z-50">
+      <button id="langBtn"
+        class="flex items-center gap-2 bg-[#102216] text-[#13ec5b] border border-[#13ec5b] text-xs rounded px-3 py-1.5 focus:outline-none hover:bg-[#13ec5b]/10 transition">
+        <span id="currentLangLabel">Language</span>
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      <!-- Dropdown Menu -->
+      <div class="absolute right-0 top-full pt-1 w-40 hidden group-hover:block z-50">
+        <div class="bg-[#0a160f] border border-[#13ec5b]/30 rounded-lg shadow-xl overflow-hidden">
+          <div class="max-h-60 overflow-y-auto custom-scrollbar-chat p-1 space-y-1">
+            <button onclick="setLang('en', 'English')" class="lang-opt">English</button>
+            <button onclick="setLang('hi', 'Hindi')" class="lang-opt">Hindi</button>
+            <button onclick="setLang('ml', 'Malayalam')" class="lang-opt">Malayalam</button>
+            <button onclick="setLang('fr', 'French')" class="lang-opt">French</button>
+            <button onclick="setLang('es', 'Spanish')" class="lang-opt">Spanish</button>
+            <button onclick="setLang('zh', 'Chinese')" class="lang-opt">Chinese</button>
+            <button onclick="setLang('de', 'German')" class="lang-opt">German</button>
+            <button onclick="setLang('ja', 'Japanese')" class="lang-opt">Japanese</button>
+            <button onclick="setLang('ru', 'Russian')" class="lang-opt">Russian</button>
+            <button onclick="setLang('ar', 'Arabic')" class="lang-opt">Arabic</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </header>
+  <!-- Sidebar Overlay (outside header to avoid stacking context conflicts) -->
+  <div id="overlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 z-40 hidden backdrop-blur-sm"></div>
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar" class="fixed top-0 left-0 z-50 w-64 h-full
+         bg-[#112217] p-4 flex flex-col
+         transform -translate-x-full
+         transition-transform duration-300">
+    <h2 class="text-xl font-bold text-[#13ec5b]" data-i18n="netra_admin">NETRA Admin</h2>
+    <!-- ADMIN PROFILE CARD -->
+    <div class="flex items-center gap-3 bg-[#1a2e22] p-3 rounded">
+      <img id="profilePic" src="https://via.placeholder.com/60"
+        class="w-14 h-14 rounded-full object-cover border border-green-400">
+      <div>
+        <p id="adminName" class="font-semibold">Admin User</p>
+        <p class="text-xs text-green-300">Administrator</p>
+      </div>
+    </div>
+ 
+    <nav class="space-y-2 flex-1 overflow-y-auto custom-scrollbar-chat pr-2">
+      <button onclick="showSection('overview', this)" class="nav-btn active"> <span data-i18n="overview">Overview</span></button>
+      <button onclick="showSection('map', this)" class="nav-btn"> <span data-i18n="tactical_map">Tactical Map</span></button>
+      <button onclick="showSection('management', this)" class="nav-btn"> <span data-i18n="management">Management</span></button>
+      <button onclick="showSection('public_entries', this)" class="nav-btn"> <span data-i18n="public_entries">Public Entries</span></button>
+      <button onclick="showSection('alerts', this)" class="nav-btn"> <span data-i18n="alerts">Alerts</span></button>
+      <button onclick="showSection('messages', this)" class="nav-btn"> <span data-i18n="messages">Messages</span></button>
+      <button onclick="showSection('monitoring', this)" class="nav-btn"> <span data-i18n="monitoring">Live Monitoring</span></button>
+      <button onclick="showSection('health', this)" class="nav-btn"> <span data-i18n="health">System Health</span></button>
+      <button onclick="showSection('config', this)" class="nav-btn"> <span data-i18n="config">Configuration</span></button>
+      <button onclick="showSection('restricted_zones', this); loadZones()" class="nav-btn"> <span data-i18n="restricted_zones">Restricted Zones</span></button>
+      <button onclick="showSection('profile', this)" class="nav-btn"> <span data-i18n="profile">Profile</span></button>
+    </nav>
+
+    <!-- Sidebar Bottom Actions -->
+    <div class="mt-auto pt-4 border-t border-white/10">
+      <button onclick="logout()"
+        class="w-full group bg-red-500/10 hover:bg-red-500 border border-red-500/30 hover:border-red-500 p-3 rounded-xl transition-all duration-300 flex items-center justify-between overflow-hidden relative cursor-pointer block no-underline">
+        <div
+          class="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000">
+        </div>
+        <div class="flex items-center gap-3">
+          <div
+            class="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center text-red-500 group-hover:text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+              stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M17 16l4-4m0 0l-4 4m4-4H3m6 0v-3a4 4 0 00-4-4H7a4 4 0 00-4 4v3m6 0v6a4 4 0 01-4 4H7a4 4 0 01-4-4v-6" />
+            </svg>
+          </div>
+          <span class="text-white font-bold" data-i18n="logout">Logout</span>
+        </div>
+      </button>
+    </div>
+  </aside>
+  <!-- MAIN -->
+  <main class="flex-1 p-6 overflow-y-auto space-y-8 pt-16">
+
+
+    <!-- OVERVIEW -->
+    <section id="overview" class="section space-y-8">
+
+      <!-- 1. System Summary Cards -->
+      <div>
+        <h1 class="text-3xl font-bold mb-6 tracking-tight"><span data-i18n="system_overview">System Overview</span></h1>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div class="glass p-4 rounded-xl text-center transition-all duration-300 hover:-translate-y-1">
+            <h3 class="text-[0.65rem] text-gray-400 uppercase tracking-widest font-semibold mb-2"
+              data-i18n="total_users">Total Users</h3>
+            <p class="text-3xl font-bold text-white">{{ stats.users }}</p>
+          </div>
+          <div class="glass p-4 rounded-xl text-center transition-all duration-300 hover:-translate-y-1">
+            <h3 class="text-[0.65rem] text-emerald-400 uppercase tracking-widest font-semibold mb-2"
+              data-i18n="active_officers">Active Officers
+            </h3>
+            <p class="text-3xl font-bold text-emerald-300">{{ stats.officers }}</p>
+          </div>
+          <div class="glass p-4 rounded-xl text-center transition-all duration-300 hover:-translate-y-1">
+            <h3 class="text-[0.65rem] text-gray-400 uppercase tracking-widest font-semibold mb-2"
+              data-i18n="total_cases">Total Cases</h3>
+            <p class="text-3xl font-bold text-white">{{ stats.cases }}</p>
+          </div>
+          <div
+            class="glass p-4 rounded-xl text-center transition-all duration-300 hover:-translate-y-1 relative overflow-hidden group">
+            <div class="absolute inset-0 bg-yellow-500/5 group-hover:bg-yellow-500/10 transition"></div>
+            <h3 class="text-[0.65rem] text-yellow-500 uppercase tracking-widest font-semibold mb-2" data-i18n="pending">
+              Pending</h3>
+            <p class="text-3xl font-bold text-yellow-400 relative z-10">{{ stats.pending }}</p>
+          </div>
+          <div class="glass p-4 rounded-xl text-center transition-all duration-300 hover:-translate-y-1">
+            <h3 class="text-[0.65rem] text-blue-400 uppercase tracking-widest font-semibold mb-2" data-i18n="resolved">
+              Resolved</h3>
+            <p class="text-3xl font-bold text-blue-300">{{ stats.resolved }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Activity Snapshot (Charts) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="glass p-6 rounded-2xl">
+          <h3 class="panel-title mb-4 text-sm font-bold text-gray-400 uppercase tracking-wider">Alert Status
+            Distribution</h3>
+          <div class="h-48 flex justify-center">
+            <canvas id="overviewStatusChart"></canvas>
+          </div>
+        </div>
+        <div class="glass p-6 rounded-2xl">
+          <h3 class="panel-title mb-4 text-sm font-bold text-gray-400 uppercase tracking-wider">Activity Trend</h3>
+          <div class="h-48">
+            <canvas id="overviewActivityChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Recent Activity & Highlights -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Feed -->
+        <div class="lg:col-span-2 glass p-6 rounded-2xl">
+          <h3 class="panel-title mb-6 text-gray-200 font-semibold" data-i18n="recent_activity">Recent Activity</h3>
+          <div class="space-y-4 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+            {% for item in activity_feed %}
+            <div class="flex gap-4 items-start border-b border-white/5 pb-3 last:border-0 last:pb-0">
+              <div class="mt-1.5 flex-shrink-0">
+                {% if item.type == 'user' %}
+                <div class="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]"></div>
+                {% else %}
+                <div class="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]"></div>
+                {% endif %}
+              </div>
+              <div>
+                <p class="text-sm text-gray-200 leading-snug">{{ item.text }}</p>
+                <p class="text-[0.65rem] text-gray-500 uppercase tracking-wide mt-1">{{ item.time }}</p>
+              </div>
+            </div>
+            {% endfor %}
+            {% if not activity_feed %}
+            <p class="text-gray-500 italic text-sm">No recent activity.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Highlights & High Priority -->
+        <div class="glass p-6 rounded-2xl space-y-4">
+          <h3 class="panel-title text-gray-200 font-semibold">Live Alerts</h3>
+
+          {% if stats.pending > 0 %}
+          <div class="bg-yellow-500/10 border-l-2 border-yellow-500 p-4 rounded-r-lg backdrop-blur-sm">
+            <p class="text-yellow-200 font-bold text-sm mb-1">Action Needed</p>
+            <p class="text-xs text-yellow-100/70">{{ stats.pending }} User(s) waiting for approval.</p>
+          </div>
+          {% endif %}
+
+          <!-- Check for Critical Alerts manually in template or passed prop -->
+          {% set critical_count = active_alerts | selectattr('severity', 'equalto', 'Critical') | list | length %}
+          {% if critical_count > 0 %}
+          <div class="bg-red-500/10 border-l-2 border-red-500 p-4 rounded-r-lg backdrop-blur-sm animate-pulse">
+            <p class="text-red-200 font-bold text-sm mb-1">Security Warning</p>
+            <p class="text-xs text-red-100/70">{{ critical_count }} Critical Alert(s) Active!</p>
+          </div>
+          {% endif %}
+
+          {% if stats.pending == 0 and critical_count == 0 %}
+          <div class="p-6 text-center text-emerald-400/50 flex flex-col items-center">
+            <div class="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 opacity-75 loading-none" fill="none"
+                viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <p class="text-sm font-medium">All Systems Nominal</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 4. Quick Navigation -->
+      <div>
+        <h3 class="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4" data-i18n="quick_actions">Quick
+          Actions</h3>
+        <div class="flex flex-wrap gap-4">
+          <button onclick="showSection('management')"
+            class="glass hover:bg-white/10 text-emerald-400 px-6 py-4 rounded-xl flex items-center gap-3 transition-all duration-300 group">
+            <span class="text-xl group-hover:scale-110 transition-transform">👥</span> <span class="text-sm font-medium"
+              data-i18n="review_pending">Review Pending</span>
+          </button>
+          <button onclick="showSection('management')"
+            class="glass hover:bg-white/10 text-emerald-400 px-6 py-4 rounded-xl flex items-center gap-3 transition-all duration-300 group">
+            <span class="text-xl group-hover:scale-110 transition-transform">👮</span> <span class="text-sm font-medium"
+              data-i18n="manage_officers">Manage Officers</span>
+          </button>
+          <button onclick="exportReports()"
+            class="glass hover:bg-white/10 text-blue-400 px-6 py-4 rounded-xl flex items-center gap-3 transition-all duration-300 group">
+            <span class="text-xl group-hover:scale-110 transition-transform">📄</span> <span class="text-sm font-medium"
+              data-i18n="global_reports">Global Reports</span>
+          </button>
+          <button onclick="triggerSimulation()"
+            class="glass hover:bg-red-900/20 text-red-500 border border-red-500/20 px-6 py-4 rounded-xl flex items-center gap-3 transition-all duration-300 group">
+            <span class="text-xl group-hover:scale-110 transition-transform animate-pulse">🚨</span> <span
+              class="text-sm font-bold">Simulate Intrusion</span>
+          </button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- MAP VIEW -->
+    <section id="map" class="section hidden">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold" data-i18n="tactical_map">Tactical Map</h2>
+        <button onclick="toggleHeatmap()" data-i18n="toggle_heatmap"
+          class="bg-[#13ec5b]/20 text-[#13ec5b] px-3 py-1 rounded border border-[#13ec5b] hover:bg-[#13ec5b] hover:text-black transition text-sm font-bold">
+          Toggle Heatmap
+        </button>
+      </div>
+      <div class="glass p-2 rounded-xl">
+        <div id="adminMap" class="h-96 w-full rounded-lg z-0"></div>
+      </div>
+    </section>
+
+    <!-- MANAGEMENT -->
+    <section id="management" class="section hidden">
+      <h1 class="section-title" data-i18n="management">Management Hub</h1>
+
+      <!-- PENDING APPROVALS -->
+      {% if pending_users %}
+      <div class="panel mb-6 border-l-4 border-yellow-500">
+        <h3 class="panel-title text-yellow-500">⚠️ Pending Approvals</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="text-gray-400 border-b border-gray-700">
+                <th class="py-2">Name</th>
+                <th class="py-2">Email</th>
+                <th class="py-2">Role</th>
+                <th class="py-2">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for user in pending_users %}
+              <tr id="user-row-{{user.id}}" class="border-b border-gray-800">
+                <td class="py-2">{{ user.name }}</td>
+                <td class="py-2">{{ user.email }}</td>
+                <td class="py-2 uppercase text-xs">{{ user.role }}</td>
+                <td class="py-2 flex gap-2">
+                  <button onclick="updateUserStatus('{{ user.id }}', 'approved')"
+                    class="bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-xs">Approve</button>
+                  <button onclick="updateUserStatus('{{ user.id }}', 'rejected')"
+                    class="bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded text-xs">Reject</button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- ACTIVE USER LIST -->
+      <div class="glass p-6 rounded-xl mb-6 border border-[#13ec5b]/20">
+        <h3 class="panel-title mb-6 text-[#13ec5b]" data-i18n="active_officers_roles">Active Security Officers & Roles</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="text-gray-400 border-b border-gray-700">
+                <th class="py-2" data-i18n="officer">Name</th>
+                <th class="py-2" data-i18n="email">Email</th>
+                <th class="py-2" data-i18n="current_role">Current Role</th>
+                <th class="py-2" data-i18n="assign_role">Assign Role</th>
+                <th class="py-2 text-right" data-i18n="action">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="userList">
+              {% for officer in active_users %}
+              <tr class="border-b border-gray-800 hover:bg-white/5 transition" id="user-row-{{officer.id}}">
+                <td class="py-3 font-semibold">{{ officer.name }}</td>
+                <td class="py-3 text-gray-400">{{ officer.email }}</td>
+                <td class="py-3">
+                  <span class="bg-blue-500/20 text-blue-300 px-2 py-1 rounded text-xs border border-blue-500/30">
+                    {{ officer.sub_role or 'Officer' }}
+                  </span>
+                </td>
+                <td class="py-3">
+                  <div class="flex items-center gap-2">
+                    <select id="role-select-{{officer.id}}"
+                      class="bg-black/50 border border-white/10 rounded text-xs p-1 text-gray-300 focus:border-green-500 focus:outline-none">
+                      <option value="Investigator" {% if officer.sub_role=='Investigator' %}selected{% endif %}>
+                        Investigator</option>
+                      <option value="Supervisor" {% if officer.sub_role=='Supervisor' %}selected{% endif %}>Supervisor
+                      </option>
+                      <option value="Analyst" {% if officer.sub_role=='Analyst' %}selected{% endif %}>Analyst</option>
+                    </select>
+                    <button onclick="updateUserRole('{{ officer.id }}')"
+                      class="bg-[#13ec5b]/10 hover:bg-[#13ec5b]/20 text-[#13ec5b] p-1 rounded transition">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24"
+                        stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+                <td class="py-3 text-right">
+                  <button onclick="updateUserStatus('{{ officer.id }}', 'blocked')"
+                    class="text-red-400 hover:text-red-300 border border-red-500/30 px-3 py-1 rounded text-xs transition duration-200 hover:bg-red-500/10" data-i18n="block_access">
+                    Block Access
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if not active_users %}
+          <p class="text-gray-500 italic mt-4 text-center">No active officers found.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- BLOCKED USER HISTORY -->
+      <div class="glass p-4 rounded-xl">
+        <h3 class="panel-title text-red-400" data-i18n="blocked_officers_history">Blocked Officers History</h3>
+        <ul id="blockedUserList" class="space-y-2 text-sm mt-3">
+          {% for officer in blocked_users %}
+          <li class="flex justify-between items-center bg-red-900/10 p-3 rounded border border-red-500/10"
+            id="user-row-{{officer.id}}">
+            <span class="text-gray-400">{{ officer.name }} ({{ officer.email }})</span>
+            <button onclick="updateUserStatus('{{ officer.id }}', 'approved')"
+              class="text-green-400 hover:text-green-300 border border-green-500/30 px-2 py-1 rounded text-xs transition duration-200" data-i18n="unblock">
+              Unblock
+            </button>
+          </li>
+          {% endfor %}
+          {% if not blocked_users %}
+          <li class="text-gray-500 italic">No blocked officers.</li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <!-- CASE MANAGEMENT -->
+      <div class="glass p-6 rounded-xl mt-6 border border-blue-500/20">
+        <h3 class="panel-title mb-4 text-blue-400" data-i18n="manage_case_assignments">Manage Case Assignments</h3>
+        <div class="overflow-x-auto max-h-96 custom-scrollbar">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="text-gray-400 border-b border-gray-700">
+                <th class="py-2 px-4" data-i18n="case_filename">Case Filename</th>
+                <th class="py-2 px-4" data-i18n="officer_current">Officer (Current)</th>
+                <th class="py-2 px-4" data-i18n="status">Status</th>
+                <th class="py-2 px-4" data-i18n="transfer_to">Transfer To</th>
+                <th class="py-2 px-4" data-i18n="action">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for case in all_cases %}
+              <tr class="border-b border-gray-800 hover:bg-white/5 transition" id="case-row-{{case.id}}">
+                <td class="py-3 px-4">
+                  <div class="font-bold text-green-400 font-mono">{{ case.case_id }}</div>
+                  <div class="text-xs text-gray-500 truncate w-32">{{ case.title }}</div>
+                </td>
+                <td class="py-3 px-4 text-gray-300">
+                  {{ case.assigned_officer_name or 'Unassigned' }}
+                </td>
+                <td class="py-3 px-4">
+                  <span class="px-2 py-1 rounded text-xs border border-gray-600 text-gray-400">{{ case.status }}</span>
+                </td>
+                <td class="py-3 px-4">
+                  <select id="transfer-select-{{case.id}}"
+                    class="bg-black/50 border border-white/10 rounded text-xs p-2 w-32 text-gray-300 focus:border-blue-500 focus:outline-none">
+                    <option value="" disabled selected>Select Officer</option>
+                    {% for off in active_users %}
+                    <option value="{{ off.id }}">{{ off.name }} ({{ off.sub_role or 'Officer' }})</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td class="py-3 px-4">
+                  <button onclick="reassignCase('{{ case.id }}')"
+                    class="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/50 px-3 py-1 rounded text-xs transition" data-i18n="transfer">
+                    Transfer
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+              {% if not all_cases %}
+              <tr>
+                <td colspan="5" class="py-6 text-center text-gray-500 italic">No active cases.</td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- MESSAGES SECTION -->
+    <section id="messages" class="section hidden">
+      <h2 class="section-title" data-i18n="messages">Messages</h2>
+      <div id="messaging" class="glass p-6 rounded-xl border border-white/5 mb-6">
+        <h3 class="panel-title mb-4 font-bold text-emerald-400" data-i18n="comms_channel">Comms Channel</h3>
+
+        <!-- Compose -->
+        <div class="mb-4 space-y-2">
+          <div class="flex gap-2">
+            <select id="msgRecipient"
+              class="glass p-2 rounded text-sm border-white/10 w-1/3 text-gray-300 focus:outline-none focus:border-green-500">
+              <option value="all" class="bg-black">Broadcast to All Officers</option>
+              {% for officer in active_users %}
+              <option value="{{ officer.id }}" class="bg-black">{{ officer.name }}</option>
+              {% endfor %}
+            </select>
+            <input id="msgContent" type="text" placeholder="Type a message..." data-i18n="type_message"
+              class="glass p-2 rounded text-sm border-white/10 w-full text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+            <button onclick="sendMessage()"
+              class="bg-gradient-to-r from-green-500 to-emerald-600 text-black px-4 py-2 rounded hover:from-green-400 hover:to-emerald-500 font-bold shadow-lg shadow-green-500/20 transition-all duration-300" data-i18n="send">
+              Send
+            </button>
+          </div>
+        </div>
+
+        <!-- Log -->
+        <h4 class="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wide">Recent Comms</h4>
+        <div class="h-[400px] overflow-y-auto space-y-3 custom-scrollbar pr-2">
+          {% for msg in messages %}
+          <div
+            class="p-3 rounded-lg text-sm shadow-sm {{ 'bg-emerald-900/20 ml-12 border-l-2 border-emerald-500 self-end text-right' if msg.sender_id == session.user.id else 'bg-white/5 mr-12 border-r-2 border-gray-600' }}">
+            <div
+              class="flex justify-between text-xs text-gray-500 mb-1 {{ 'flex-row-reverse' if msg.sender_id == session.user.id }}">
+              <span class="font-bold text-gray-400">
+                {% if msg.sender_id == session.user.id %}
+                You ➔ {{ 'All' if not msg.receiver_id else msg.receiver_name or 'Officer' }}
+                {% else %}
+                {{ msg.sender_name }} ➔ You
+                {% endif %}
+              </span>
+              <span>{{ msg.timestamp }}</span>
+            </div>
+            <p class="text-gray-200">{{ msg.content }}</p>
+          </div>
+          {% endfor %}
+          {% if not messages %}
+          <div class="flex flex-col items-center justify-center h-full text-gray-500 space-y-2">
+            <span class="text-2xl opacity-20">💬</span>
+            <p class="text-xs italic">No recent communications.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <!-- RESTRICTED ZONES SECTION -->
+    <section id="restricted_zones" class="section hidden">
+      <h2 class="section-title" data-i18n="restricted_zones">Restricted Zone Management</h2>
+      <!-- ... (existing content) ... -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- ... (existing content) ... -->
+        <!-- Zone List -->
+        <div class="glass p-6 rounded-xl border border-white/5">
+          <h3 class="panel-title mb-4 text-gray-300" data-i18n="active_restricted_zones">Active Restricted Zones</h3>
+          <div id="zoneListContainer" class="space-y-3 h-80 overflow-y-auto custom-scrollbar">
+            <!-- Populated by JS -->
+            <p class="text-gray-500 italic text-center py-4" data-i18n="loading_zones">Loading zones...</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW: PUBLIC ENTRIES SECTION -->
+    <section id="public_entries" class="section hidden">
+      <h1 class="section-title" data-i18n="public_entries_logistics">Public Entry Logistics</h1>
+
+      <!-- Stats Row -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="glass p-6 rounded-xl border-l-4 border-green-500">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1" data-i18n="total_revenue">Total Revenue</h3>
+          <p class="text-3xl font-bold text-white">₹{{ entry_stats.total_revenue }}</p>
+        </div>
+        <div class="glass p-6 rounded-xl border-l-4 border-blue-500">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1" data-i18n="total_headcount">Total Headcount</h3>
+          <p class="text-3xl font-bold text-white">{{ entry_stats.total_heads }}</p>
+        </div>
+        <div class="glass p-6 rounded-xl border-l-4 border-purple-500">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1" data-i18n="latest_entry">Latest Entry</h3>
+          <p class="text-xl font-bold text-white truncate">
+            {% if public_entries %}
+            {{ public_entries[0].name }} ({{ public_entries[0].role }})
+            {% else %}
+            --
+            {% endif %}
+          </p>
+        </div>
+      </div>
+
+      <!-- Entries Table -->
+      <div class="glass p-6 rounded-xl border border-white/5">
+        <h3 class="panel-title mb-6 font-bold text-emerald-400" data-i18n="entry_logs">Entry Logs</h3>
+        <div class="overflow-x-auto custom-scrollbar">
+          <table class="w-full text-sm text-left">
+            <thead>
+              <tr class="text-gray-400 border-b border-gray-700">
+                <th class="py-3 px-4" data-i18n="time">Time</th>
+                <th class="py-3 px-4" data-i18n="visitor_name">Name</th>
+                <th class="py-3 px-4" data-i18n="role">Role</th>
+                <th class="py-3 px-4" data-i18n="phone">Phone</th>
+                <th class="py-3 px-4" data-i18n="count">Count</th>
+                <th class="py-3 px-4" data-i18n="amount">Amount</th>
+                <th class="py-3 px-4" data-i18n="status">Status</th>
+                <th class="py-3 px-4" data-i18n="payment_id">Payment ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in public_entries %}
+              <tr class="border-b border-gray-800 hover:bg-white/5 transition">
+                <td class="py-3 px-4 text-gray-400 text-xs">{{ entry.created_at }}</td>
+                <td class="py-3 px-4 font-bold">{{ entry.name }}</td>
+                <td class="py-3 px-4 uppercase text-xs">
+                  <span class="px-2 py-1 rounded border border-gray-600 
+                    {% if entry.role == 'attendee' %}text-blue-400 border-blue-500/30{% endif %}
+                    {% if entry.role == 'media' %}text-purple-400 border-purple-500/30{% endif %}
+                    {% if entry.role == 'volunteer' %}text-orange-400 border-orange-500/30{% endif %}">
+                    {{ entry.role }}
+                  </span>
+                </td>
+                <td class="py-3 px-4 text-gray-400">{{ entry.phone }}</td>
+                <td class="py-3 px-4">{{ entry.count }}</td>
+                <td class="py-3 px-4 text-green-400 font-mono">₹{{ entry.amount }}</td>
+                <td class="py-3 px-4">
+                  {% if entry.status == 'Entered' %}
+                  <span class="text-green-500 font-bold text-xs">Entered</span>
+                  {% elif entry.status == 'Approved' %}
+                  <span class="text-blue-400 font-bold text-xs">Approved</span>
+                  {% elif entry.status == 'Paid' %}
+                  <span class="text-blue-300 font-bold text-xs">Paid (Pending Approval)</span>
+                  <button onclick="approvePublicEntry('{{ entry.id }}')"
+                    class="ml-2 bg-green-600 hover:bg-green-500 text-white text-[10px] px-2 py-0.5 rounded uppercase font-bold">Approve</button>
+                  {% else %}
+                  <span class="text-gray-500 text-xs">{{ entry.status }}</span>
+                  <button onclick="approvePublicEntry('{{ entry.id }}')"
+                    class="ml-2 bg-green-600 hover:bg-green-500 text-white text-[10px] px-2 py-0.5 rounded uppercase font-bold">Approve</button>
+                  {% endif %}
+                </td>
+                <td class="py-3 px-4 text-xs text-gray-500 font-mono">{{ entry.payment_id }}</td>
+              </tr>
+              {% endfor %}
+              {% if not public_entries %}
+              <tr>
+                <td colspan="8" class="py-8 text-center text-gray-500 italic">No public entries recorded.</td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+    </section>
+         <!-- ALERTS SECTION -->
+    <section id="alerts" class="section hidden">
+      <h2 class="section-title" data-i18n="alerts">System Alerts</h2>
+ 
+      <!-- ACTIVE ALERTS -->
+      <h3 class="text-xl font-bold text-red-400 mb-3 border-b border-gray-700 pb-2" data-i18n="active_alerts">Active Alerts</h3>
+      <div id="alertContainer" class="space-y-4 mb-8">
+        {% for alert in active_alerts %}
+        <div class="alert {{ 'red' if alert.severity == 'Critical' else 'yellow' }} flex justify-between items-center">
+          <span>
+            <b>{{ alert.created_at }}</b> — {{ alert.message }} <i class="text-xs text-gray-300">({{ alert.source
+              }})</i>
+          </span>
+          <div class="flex gap-2">
+            <button class="text-xs text-blue-400 border border-blue-500/30 px-2 py-1 rounded hover:bg-blue-500/10"
+              onclick="shareAlert('{{ alert.message|e }}', '{{ alert.source|e }}')" data-i18n="share">Share</button>
+            <button class="ack-btn" onclick="acknowledge(this, '{{ alert.id }}')" data-i18n="acknowledge">Acknowledge</button>
+          </div>
+        </div>         </div>
+        </div>
+        {% endfor %}
+        {% if not active_alerts %}
+        <p id="noAlerts" class="text-green-400 italic" data-i18n="no_active_alerts">✅ No active alerts.</p>
+        {% endif %}
+        <!-- Hidden element to toggle if JS clears all -->
+        <p id="noAlertsDynamic" class="hidden text-green-400 italic" data-i18n="no_active_alerts">✅ No active alerts.</p>
+      </div>
+
+      <!-- ALERT HISTORY -->
+      <h3 class="text-xl font-bold text-gray-400 mb-3 border-b border-white/10 pb-2" data-i18n="alert_history">Alert History</h3>
+      <div id="alertHistoryContainer" class="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+        {% for alert in resolved_alerts %}
+        <div
+          class="p-3 rounded glass border-none text-gray-400 text-sm flex justify-between items-center hover:bg-white/5 transition">
+          <span>
+            {{ alert.created_at }} — {{ alert.message }}
+          </span>
+          <div class="flex items-center gap-2">
+            <a href="/generate_case_file/{{ alert.id }}" target="_blank"
+              class="text-xs bg-blue-500/10 text-blue-300 px-2 py-1 rounded border border-blue-500/20 hover:bg-blue-500/20">
+              Export Case
+            </a>
+            <span
+              class="text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded border border-green-500/20">Resolved</span>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not resolved_alerts %}
+        <p class="text-gray-500 italic">No history available.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <p id="noAlerts" class="hidden text-green-400 mt-4">
+      ✅ No active alerts
+    </p>
+    </section>
+
+    <!-- MONITORING -->
+    <section id="monitoring" class="section hidden">
+      <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold tracking-tight">Live <span class="gradient-text">Monitoring</span></h1>
+        <div class="flex gap-2">
+          <button class="glass px-3 py-1 rounded text-xs text-green-400 border border-green-500/30">Auto-Cycle</button>
+          <button class="glass px-3 py-1 rounded text-xs text-gray-400 hover:text-white">Grid View</button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 h-[calc(100vh-200px)] overflow-y-auto pr-2 custom-scrollbar">
+        <!-- Cam 1 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-01 [MAIN GATE]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/0"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 2 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-02 [LOBBY]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/1"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 3 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-03 [PERIMETER]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/2"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 4 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-04 [SERVER]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/3"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 5 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-05 [PARKING]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/4"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 6 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-06 [ROOF]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/5"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 7 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-07 [STAIRS]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/6"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+        <!-- Cam 8 -->
+        <div class="cam-feed rounded-xl relative group">
+          <div class="cam-overlay">CAM-08 [DOCK]<br><span class="live-clock">--:--:--</span></div>
+          <div class="rec-indicator">
+            <div class="rec-dot"></div> REC
+          </div>
+          <img src="/video_feed/7"
+            class="w-full h-full object-cover opacity-60 grayscale hover:grayscale-0 transition duration-500">
+        </div>
+      </div>
+
+      <script>
+        function updateClocks() {
+          const now = new Date();
+          const time = now.toLocaleTimeString();
+          document.querySelectorAll('.live-clock').forEach(el => el.innerText = time);
+        }
+        setInterval(updateClocks, 1000);
+        updateClocks();
+      </script>
+    </section>
+
+    <!-- HEALTH -->
+    <section id="health" class="section hidden">
+      <h1 class="section-title" data-i18n="health">System Health</h1>
+
+      <!-- Status Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="glass p-4 rounded-xl flex items-center justify-between">
+          <div>
+            <p class="text-gray-400 text-xs uppercase" data-i18n="overall_status">Overall Status</p>
+            <p class="text-green-400 font-bold text-lg">OPERATIONAL</p>
+          </div>
+          <div class="h-3 w-3 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></div>
+        </div>
+        <div class="glass p-4 rounded-xl flex items-center justify-between">
+          <div>
+            <p class="text-gray-400 text-xs uppercase" data-i18n="database">Database</p>
+            <p class="text-green-400 font-bold">Connected</p>
+          </div>
+          <div class="text-2xl">🗄️</div>
+        </div>
+        <div class="glass p-4 rounded-xl flex items-center justify-between">
+          <div>
+            <p class="text-gray-400 text-xs uppercase" data-i18n="ai_engine">AI Engine</p>
+            <p class="text-green-400 font-bold">Active</p>
+          </div>
+          <div class="text-2xl">🧠</div>
+        </div>
+        <div class="glass p-4 rounded-xl flex items-center justify-between">
+          <div>
+            <p class="text-gray-400 text-xs uppercase" data-i18n="last_backup">Last Backup</p>
+            <p class="text-blue-400 font-bold">2 Hours Ago</p>
+          </div>
+          <div class="text-2xl">💾</div>
+        </div>
+      </div>
+
+      <!-- Live Metrics -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="glass p-6 rounded-xl">
+          <h3 class="font-bold mb-4 text-green-400 flex items-center gap-2">
+            <span class="animate-pulse">●</span> <span data-i18n="live_cpu">Live CPU Usage</span>
+          </h3>
+          <div class="h-64">
+            <canvas id="cpuChart"></canvas>
+          </div>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <h3 class="font-bold mb-4 text-blue-400 flex items-center gap-2">
+            <span class="animate-pulse">●</span> <span data-i18n="live_memory">Live Memory Usage</span>
+          </h3>
+          <div class="h-64">
+            <canvas id="memChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+       <section id="fines" class="section hidden">
+      <h1 class="section-title" data-i18n="fines_revenue">Fines & Revenue</h1>
+ 
+      <!-- Summary Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="glass p-6 rounded-xl">
+          <h3 class="text-xs uppercase text-gray-400 tracking-wider font-bold mb-2" data-i18n="total_fine_revenue">Total Fine Revenue</h3>
+          <p class="text-4xl font-bold text-green-400">₹{{ fines_stats.total_revenue or 0 }}</p>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <h3 class="text-xs uppercase text-gray-400 tracking-wider font-bold mb-2" data-i18n="total_fines_issued">Total Fines Issued</h3>
+          <p class="text-4xl font-bold text-white">{{ fines_stats.total_count or 0 }}</p>
+        </div>
+        <div class="glass p-6 rounded-xl">
+          <h3 class="text-xs uppercase text-gray-400 tracking-wider font-bold mb-2" data-i18n="pending_payments">Pending Payments</h3>
+          <p class="text-4xl font-bold text-red-400">{{ fines_stats.pending_count or 0 }}</p>
+        </div>
+      </div>.pending_count or 0 }}</p>
+        </div>
+      </div>
+
+      <!-- Filter & Search -->
+      <div class="flex flex-col md:flex-row gap-4 mb-6">
+        <input type="text" id="fineSearch" onkeyup="filterFines()" placeholder="Search by ID, Name or Reason..."
+          class="flex-1 glass p-3 rounded text-white border-white/10 focus:border-green-500 outline-none">
+        <select id="fineFilter" onchange="filterFines()"
+          class="glass p-3 rounded text-white border-white/10 bg-black outline-none focus:border-green-500">
+          <option value="all">All Status</option>
+          <option value="Paid">Paid</option>
+          <option value="Pending">Pending</option>
+        </select>
+      </div>
+
+      <!-- Fines Table -->
+      <div class="glass rounded-xl overflow-hidden overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-white/5 text-gray-400 uppercase text-xs">
+            <tr>
+              <th class="p-4" data-i18n="id">ID</th>
+              <th class="p-4" data-i18n="violator">Violator</th>
+              <th class="p-4" data-i18n="violation">Violation</th>
+              <th class="p-4" data-i18n="amount">Amount</th>
+              <th class="p-4" data-i18n="issued_by">Issued By</th>
+              <th class="p-4" data-i18n="status">Status</th>
+              <th class="p-4" data-i18n="date">Date</th>
+              <th class="p-4" data-i18n="action">Action</th>
+            </tr>
+          </thead>
+          <tbody id="finesTableBody">
+            {% for fine in all_fines %}
+            <tr class="border-b border-white/5 hover:bg-white/5 fine-row" data-status="{{ fine.status }}"
+              data-content="{{ fine.id }} {{ fine.violator_name }} {{ fine.reason }}">
+              <td class="p-4 font-mono text-green-400">#{{ fine.id }}</td>
+              <td class="p-4 font-bold">{{ fine.violator_name }}</td>
+              <td class="p-4">{{ fine.reason }}</td>
+              <td class="p-4 font-mono">₹{{ fine.amount }}</td>
+              <td class="p-4 text-gray-400">Officer #{{ fine.issued_by }}</td>
+              <td class="p-4">
+                {% if fine.status == 'Paid' %}
+                <span
+                  class="bg-green-500/20 text-green-400 px-2 py-1 rounded text-xs border border-green-500/20">PAID</span>
+                {% else %}
+                <span
+                  class="bg-red-500/20 text-red-400 px-2 py-1 rounded text-xs border border-red-500/20">PENDING</span>
+                {% endif %}
+              </td>
+              <td class="p-4 text-gray-500 text-xs">{{ fine.created_at }}</td>
+              <td class="p-4">
+                {% if fine.evidence_path %}
+                <a href="{{ url_for('static', filename=fine.evidence_path.replace('static/', '')) }}" target="_blank"
+                  class="text-blue-400 hover:underline" data-i18n="view_proof">View Proof</a>
+                {% else %}
+                <span class="text-gray-600">-</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if not all_fines %}
+        <div class="p-8 text-center text-gray-500 italic">No fines found.</div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section id="config" class="section hidden">
+      <h1 class="section-title" data-i18n="configuration">System Configuration</h1>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- Global Settings (Merged from system_config) -->
+        <div class="glass p-6 rounded-xl space-y-6">
+          <h3 class="text-lg font-bold text-purple-400 border-b border-white/10 pb-2" data-i18n="global_settings">Global Settings</h3>
+
+          <div class="flex justify-between items-center p-4 bg-white/5 rounded-lg border border-white/5">
+            <div>
+              <p class="font-bold text-gray-200">Enable AI Auto-Scan</p>
+              <p class="text-xs text-gray-500">Automatically scan evidence for detections.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="conf_ai_scan" class="sr-only peer">
+              <div
+                class="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-purple-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all">
+              </div>
+            </label>
+          </div>
+
+          <div class="flex justify-between items-center p-4 bg-white/5 rounded-lg border border-white/5">
+            <div>
+              <p class="font-bold text-gray-200">System Lockdown</p>
+              <p class="text-xs text-gray-500">Restrict all non-admin access.</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="conf_lockdown" class="sr-only peer">
+              <div
+                class="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-red-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all">
+              </div>
+            </label>
+          </div>
+
+          <div>
+            <label class="text-sm text-gray-400 mb-2 block">Default Alert Message</label>
+            <input id="conf_alert_msg" type="text"
+              class="w-full glass p-3 rounded text-white border-white/10 outline-none"
+              placeholder="Emergency! Please evacuate...">
+          </div>
+        </div>
+
+        <!-- Detection Settings -->
+        <div class="glass p-6 rounded-xl space-y-6">
+          <h3 class="text-lg font-bold text-green-400 border-b border-white/10 pb-2">Detection Parameters</h3>
+
+          <label class="block">
+            <div class="flex justify-between mb-2">
+              <span class="text-sm text-gray-300">Detection Sensitivity</span>
+              <span id="sensVal" class="text-green-400 font-bold">75%</span>
+            </div>
+            <input id="sensitivity" type="range"
+              class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500" value="75"
+              oninput="document.getElementById('sensVal').innerText = this.value + '%'">
+          </label>
+
+          <label class="block">
+            <div class="flex justify-between mb-2">
+              <span class="text-sm text-gray-300">Alert Confidence Threshold</span>
+            </div>
+            <input id="threshold" type="number" value="80"
+              class="w-full glass p-2 rounded focus:outline-none focus:border-green-500 transition-colors text-white">
+          </label>
+        </div>
+      </div>
+
+      <div class="mt-8 flex justify-end gap-4">
+        <button onclick="saveAllConfig()"
+          class="bg-gradient-to-r from-green-600 to-emerald-700 text-white px-8 py-3 rounded-lg font-bold shadow-lg hover:scale-[1.02] transition-all" data-i18n="save_all_settings">
+          Save All Settings
+        </button>
+      </div>
+
+      <p id="savedMsg" class="hidden text-green-400 mt-4 text-right font-bold animate-bounce">
+        ✔ Settings saved successfully!
+      </p>
+    </section>
+    <!-- PROFILE SECTION -->
+    <section id="profile" class="section hidden flex justify-center">
+      <div class="glass p-8 rounded-2xl max-w-lg w-full relative overflow-hidden">
+        <!-- Decoration -->
+        <div class="absolute -top-10 -right-10 w-32 h-32 bg-green-500/20 rounded-full blur-3xl pointer-events-none">
+        </div>
+ 
+        <h1 class="section-title text-center mb-8" data-i18n="admin_profile">Admin Profile</h1>
+
+        <!-- Profile Picture -->
+        <div class="flex flex-col items-center gap-4 mb-6">
+          <div class="relative group">
+            <img id="profilePreview" src="https://via.placeholder.com/120"
+              class="w-28 h-28 rounded-full object-cover border-4 border-white/5 group-hover:border-green-400 transition-all duration-300 shadow-xl">
+            <div
+              class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-none">
+              <span class="text-xs font-bold text-white">Change</span>
+            </div>
+          </div>
+          <input type="file" accept="image/*" onchange="updateProfilePic(event)"
+            class="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-500/10 file:text-green-400 hover:file:bg-green-500/20">
+        </div>
+
+        <!-- Profile Fields -->
+        <div class="space-y-4">
+          <div>
+            <label class="text-sm text-gray-400 ml-1">Username</label>
+            <input id="profileUsername"
+              class="w-full glass p-3 rounded-lg focus:outline-none focus:border-green-500 transition-colors text-white"
+              placeholder="admin_username">
+          </div>
+
+          <div>
+            <label class="text-sm text-gray-400 ml-1">Full Name</label>
+            <input id="profileName"
+              class="w-full glass p-3 rounded-lg focus:outline-none focus:border-green-500 transition-colors text-white"
+              placeholder="Admin Name">
+          </div>
+
+          <button onclick="saveProfile()"
+            class="w-full bg-gradient-to-r from-green-600 to-emerald-700 text-white p-3 rounded-lg font-bold hover:shadow-lg hover:shadow-green-500/20 hover:scale-[1.02] transition-all duration-300 mt-4" data-i18n="save_changes">
+            Save Changes
+          </button>
+
+          <p id="profileSavedMsg"
+            class="hidden text-green-400 text-sm text-center bg-green-500/10 py-2 rounded border border-green-500/20">
+            ✔ Profile updated successfully
+          </p>
+        </div>
+      </div>
+    </section>
+
+
+    {% include 'component_chatbot.html' %}
+  </main>
+  <script>
+    /* ---------- SHARE ALERT ---------- */
+    function shareAlert(message, source) {
+      const text = `ALERT REPORT\nSource: ${source}\nMessage: ${message}\n- NETRA System`;
+      const encodedText = encodeURIComponent(text);
+      const choice = prompt("Share via (type number):\n1. WhatsApp\n2. Email", "1");
+      if (choice === '1') window.open(`https://wa.me/?text=${encodedText}`, '_blank');
+      else if (choice === '2') window.location.href = `mailto:?subject=NETRA%20Alert&body=${encodedText}`;
+    }
+
+    /* ---------- DASHBOARD CHARTS ---------- */
+    let cpuChart, memChart, statusChart, activityChart;
+
+    function loadCharts() {
+      // OVERVIEW CHARTS
+      const pendingCount = Number("{{ stats.cases }}") - Number("{{ stats.resolved }}");
+      const resolvedCount = Number("{{ stats.resolved }}");
+
+      const ctxStatus = document.getElementById("overviewStatusChart");
+      if (ctxStatus) {
+        if (statusChart) statusChart.destroy();
+        statusChart = new Chart(ctxStatus, {
+          type: "doughnut",
+          data: {
+            labels: ["Pending", "Resolved"],
+            datasets: [{ data: [pendingCount, resolvedCount], backgroundColor: ["#eab308", "#3b82f6"], borderWidth: 0 }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: "#9ca3af" } } } }
+        });
+      }
+
+      const ctxActivity = document.getElementById("overviewActivityChart");
+      if (ctxActivity) {
+        if (activityChart) activityChart.destroy();
+        activityChart = new Chart(ctxActivity, {
+          type: "line",
+          data: {
+            labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            datasets: [{ label: "Activity", data: [12, 19, 3, 5, 2, 3, 10], borderColor: "#13ec5b", tension: 0.4, fill: true, backgroundColor: "rgba(19, 236, 91, 0.1)" }]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { color: "#6b7280" } }, y: { ticks: { color: "#6b7280" } } }, plugins: { legend: { display: false } } }
+        });
+      }
+
+      initHealthCharts();
+    }
+
+    function initHealthCharts() {
+      const cpuCtx = document.getElementById("cpuChart");
+      if (cpuCtx) {
+        cpuChart = new Chart(cpuCtx.getContext('2d'), {
+          type: 'line',
+          data: { labels: Array(20).fill(''), datasets: [{ label: 'CPU %', data: Array(20).fill(0), borderColor: '#4ade80', fill: true, backgroundColor: 'rgba(74, 222, 128, 0.1)', tension: 0.4, pointRadius: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, plugins: { legend: { display: false } } }
+        });
+      }
+      const memCtx = document.getElementById("memChart");
+      if (memCtx) {
+        memChart = new Chart(memCtx.getContext('2d'), {
+          type: 'line',
+          data: { labels: Array(20).fill(''), datasets: [{ label: 'RAM %', data: Array(20).fill(0), borderColor: '#60a5fa', fill: true, backgroundColor: 'rgba(96, 165, 250, 0.1)', tension: 0.4, pointRadius: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, plugins: { legend: { display: false } } }
+        });
+      }
+      setInterval(fetchHealthStats, 2000);
+    }
+
+    async function fetchHealthStats() {
+      if (document.getElementById('health').classList.contains('hidden')) return;
+      try {
+        const res = await fetch('/api/system_stats');
+        const data = await res.json();
+        if (cpuChart) { cpuChart.data.datasets[0].data.push(data.cpu); cpuChart.data.datasets[0].data.shift(); cpuChart.update(); }
+        if (memChart) { memChart.data.datasets[0].data.push(data.memory); memChart.data.datasets[0].data.shift(); memChart.update(); }
+      } catch (e) { }
+    }
+
+    /* ---------- CONFIG & SETTINGS ---------- */
+    async function saveAllConfig() {
+      const data = {
+        'ai_scan': document.getElementById('conf_ai_scan').checked ? 'true' : 'false',
+        'lockdown': document.getElementById('conf_lockdown').checked ? 'true' : 'false',
+        'alert_msg': document.getElementById('conf_alert_msg').value
+      };
+      try {
+        const res = await fetch('/api/update_system_config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        localStorage.setItem("sensitivity", document.getElementById('sensitivity').value);
+        localStorage.setItem("threshold", document.getElementById('threshold').value);
+
+        const msg = document.getElementById("savedMsg");
+        msg.classList.remove("hidden");
+        setTimeout(() => msg.classList.add("hidden"), 3000);
+      } catch (e) { alert("Error saving config"); }
+    }
+
+    async function loadSystemConfig() {
+      try {
+        const res = await fetch('/api/get_system_config');
+        const config = await res.json();
+        if (config) {
+          document.getElementById('conf_ai_scan').checked = config['ai_scan'] === 'true';
+          document.getElementById('conf_lockdown').checked = config['lockdown'] === 'true';
+          document.getElementById('conf_alert_msg').value = config['alert_msg'] || '';
+        }
+      } catch (e) { }
+    }
+
+    /* ---------- MAP ---------- */
+    let mapInstance = null, heatLayer = null;
+    function initMap() {
+      if (mapInstance) return;
+      mapInstance = L.map('adminMap').setView([28.6139, 77.2090], 13);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(mapInstance);
+      L.marker([28.6139, 77.2090]).addTo(mapInstance).bindPopup("HQ Center").openPopup();
+      setTimeout(toggleHeatmap, 500);
+    }
+    async function toggleHeatmap() {
+      if (!mapInstance) return;
+      if (heatLayer) { mapInstance.removeLayer(heatLayer); heatLayer = null; return; }
+      try {
+        const res = await fetch('/api/heatmap_data');
+        const points = await res.json();
+        heatLayer = L.heatLayer(points, { radius: 30, blur: 20, maxZoom: 17 }).addTo(mapInstance);
+      } catch (e) { }
+    }
+
+    /* ---------- PROFILE & UI ---------- */
+    function updateProfilePic(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        localStorage.setItem("adminPic", reader.result);
+        profilePreview.src = reader.result;
+        profilePic.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function saveProfile() {
+      const name = profileName.value.trim();
+      const username = profileUsername.value.trim();
+      if (!name || !username) return alert("All fields required");
+      try {
+        const res = await fetch('/api/update_profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+        if ((await res.json()).success) {
+          localStorage.setItem("adminName", name);
+          localStorage.setItem("adminUsername", username);
+          profileSavedMsg.classList.remove("hidden");
+          setTimeout(() => profileSavedMsg.classList.add("hidden"), 3000);
+          window.location.reload();
+        }
+      } catch (e) { alert("Error updating profile"); }
+    }
+
+    function showSection(id, btn) {
+      document.querySelectorAll(".section").forEach(sec => sec.classList.add("hidden"));
+      document.getElementById(id).classList.remove("hidden");
+      document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+      if (btn) btn.classList.add("active");
+      if (id === 'map') setTimeout(() => { initMap(); mapInstance.invalidateSize(); }, 200);
+      // Close sidebar
+      document.getElementById("sidebar").classList.add("-translate-x-full");
+      document.getElementById("overlay").classList.add("hidden");
+    }
+
+    function toggleSidebar() {
+      document.getElementById("sidebar").classList.toggle("-translate-x-full");
+      document.getElementById("overlay").classList.toggle("hidden");
+    }
+
+    /* ---------- INITIALIZATION ---------- */
+    window.onload = () => {
+      showSection("overview", document.querySelector(".nav-btn"));
+      loadCharts();
+      loadSystemConfig();
+      loadZones();
+
+      if (localStorage.getItem("adminName")) {
+        profileName.value = localStorage.getItem("adminName");
+        adminName.innerText = localStorage.getItem("adminName");
+      }
+      if (localStorage.getItem("adminPic")) {
+        profilePic.src = localStorage.getItem("adminPic");
+        profilePreview.src = localStorage.getItem("adminPic");
+      }
+      if (localStorage.getItem("sensitivity")) sensitivity.value = localStorage.getItem("sensitivity");
+      if (localStorage.getItem("threshold")) threshold.value = localStorage.getItem("threshold");
+    };
+
+    /* ---------- OTHER UTILS ---------- */
+    async function acknowledge(btn, alertId) {
+      if (!confirm("Acknowledge alert?")) return;
+      try {
+        const res = await fetch('/api/update_alert_status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: alertId, status: 'Resolved' }) });
+        if ((await res.json()).success) btn.closest('.alert').remove();
+      } catch (e) { }
+    }
+
+    function exportReports() {
+      const rows = document.querySelectorAll("#finesTableBody tr");
+      let csv = "ID,Violator,Reason,Amount,Status,Date\n";
+      rows.forEach(row => {
+        const cols = row.querySelectorAll("td");
+        if (cols.length > 0) csv += `${cols[0].innerText.replace('#', '')},${cols[1].innerText},${cols[2].innerText},${cols[3].innerText.replace('₹', '')},${cols[5].innerText.trim()},${cols[6].innerText}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'fines_report.csv'; a.click();
+    }
+
+    function filterFines() {
+      const q = document.getElementById('fineSearch').value.toLowerCase();
+      const type = document.getElementById('fineFilter').value;
+      document.querySelectorAll('.fine-row').forEach(row => {
+        const match = row.getAttribute('data-content').toLowerCase().includes(q) && (type === 'all' || row.getAttribute('data-status') === type);
+        row.style.display = match ? '' : 'none';
+      });
+    }
+
+    async function loadZones() {
+      try {
+        const res = await fetch('/api/get_zones');
+        const zones = await res.json();
+        document.getElementById('zoneListContainer').innerHTML = zones.map(z => `
+          <div class="bg-white/5 p-3 rounded flex justify-between items-center border-l-2 border-red-500">
+            <div><p class="font-bold text-gray-200 text-sm">${z.name}</p></div>
+            <button onclick="deleteZone(${z.id})" class="text-gray-400 hover:text-red-500 text-lg">×</button>
+          </div>`).join('');
+      } catch (e) { }
+    }
+  </script>
+
+  <style>
+    .nav-btn {
+      width: 100%;
+      padding: 10px;
+      text-align: left;
+      border-radius: 6px;
+      color: #d1fae5;
+      transition: 0.2s;
+    }
+
+    .nav-btn:hover,
+    .nav-btn.active {
+      background: #1a2e22;
+      color: #13ec5b;
+    }
+
+    .stat {
+      font-size: 1.6rem;
+      font-weight: bold;
+    }
+
+    .section-title {
+      font-size: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .btn {
+      background: #13ec5b;
+      color: black;
+      padding: 8px 16px;
+      border-radius: 6px;
+    }
+
+    .alert {
+      padding: 12px;
+      border-radius: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .alert.red {
+      border-left: 4px solid red;
+      background: #2a1a1a;
+    }
+
+    .alert.yellow {
+      border-left: 4px solid yellow;
+      background: #2a261a;
+    }
+
+    .ack-btn {
+      background: #13ec5b;
+      color: black;
+      padding: 4px 10px;
+      border-radius: 4px;
+    }
+
+    .cam-feed {
+      background-color: #000;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      height: 180px;
+    }
+
+    .cam-overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: rgba(0, 255, 0, 0.8);
+      font-family: monospace;
+      font-size: 0.75rem;
+      z-index: 10;
+    }
+  </style>
+  <script src="{{ url_for('static', filename='js/translations.js') }}"></script>
+</body>
+
+</html>
